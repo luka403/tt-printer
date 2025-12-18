@@ -1,0 +1,109 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+*.js.map
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+database/*.db
+database/*.sqlite
+database/*.sqlite3
+
+# Generated videos & media
+videos/
+assets/drive_videos/
+*.mp4
+*.mp3
+*.avi
+*.mov
+*.wav
+*.m4a
+*.png
+*.jpg
+*.jpeg
+*.gif
+!assets/broll/*.mp4
+assets/broll/*.mp4
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Google credentials & secrets (NEVER commit these!)
+*-*.json
+!package.json
+!tsconfig.json
+!package-lock.json
+!tsconfig*.json
+# Explicitly ignore service account keys
+*service-account*.json
+*credentials*.json
+tt-printer-*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Test outputs
+coverage/
+.nyc_output/
+*.test.js
+
+# Misc
+.cache/
+*.pid
+*.seed
+*.pid.lock
