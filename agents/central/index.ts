@@ -151,13 +151,19 @@ export class CentralAgent extends BaseAgent {
                 videoId: scriptResult.videoId, 
                 script: scriptResult.script || scriptResult.story || scriptResult.fact, 
                 niche,
-                useDriveVideos: niche === 'did_you_know' // Use Drive videos for Facts channel
+                useDriveVideos: true // Use Drive videos from assets/drive_videos (skip image generation)
             }, 
             status: 'pending'
         });
 
         if (videoResult.status === 'failed') {
-            this.log('Video generation failed.');
+            this.log('❌ Video generation failed.');
+            if (videoResult.error) {
+                this.log(`   Error: ${videoResult.error}`);
+            }
+            if (videoResult.debugDir) {
+                this.log(`   Debug files: ${videoResult.debugDir}`);
+            }
             return;
         }
 
@@ -168,6 +174,16 @@ export class CentralAgent extends BaseAgent {
             status: 'pending'
         });
 
+        console.log("\n" + "=".repeat(70));
+        console.log("✅ Daily cycle completed successfully!");
+        console.log("=".repeat(70));
+        console.log(`📹 Video ID: ${videoResult.videoId}`);
+        console.log(`📁 Video file: ${videoResult.filePath}`);
+        if (videoResult.debugDir) {
+            console.log(`🔍 Debug files: ${videoResult.debugDir}`);
+        }
+        console.log("=".repeat(70) + "\n");
+        
         this.log('Daily cycle completed successfully.');
     }
 

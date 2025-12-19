@@ -94,13 +94,17 @@ export class LLMService {
 
             return generatedText;
         } catch (error: any) {
-            console.error("LLM Generation Error:", error.message);
+            console.error("\n" + "=".repeat(70));
+            console.error("❌ LLM Generation Error:", error.message);
             if (error.response) {
                 console.error("Status:", error.response.status);
                 console.error("Response:", error.response.data);
             }
-            // Fallback for testing if no LLM is running
-            return "This is a mock response because the LLM service is not reachable. Ensure Ollama is running and the API URL is correct.";
+            console.error("=".repeat(70) + "\n");
+            
+            // Instead of returning mock, throw error so agents can handle it properly
+            // But for now, we'll still return a message but make it clear it's an error
+            throw new Error(`LLM service unavailable: ${error.message}. Please check your LLM API connection.`);
         }
     }
 }

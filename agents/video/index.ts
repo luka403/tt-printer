@@ -34,81 +34,122 @@ export class VideoAgent extends BaseAgent {
         this.log(`Starting video production for Video ${videoId} (Niche: ${niche})`);
 
         const outputDir = path.resolve(__dirname, `../../videos/processed`);
+        const debugDir = path.join(outputDir, `${videoId}_debug`);
         const imagesDir = path.join(outputDir, `${videoId}_images`);
         const tempAudioPath = path.join(outputDir, `${videoId}_audio.mp3`);
         const finalVideoPath = path.join(outputDir, `${videoId}_final.mp4`);
 
+        // Create all directories
         if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+        if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
         if (!fs.existsSync(imagesDir)) fs.mkdirSync(imagesDir, { recursive: true });
+
+        // Save script to debug directory
+        fs.writeFileSync(path.join(debugDir, 'script.txt'), script);
+        this.log(`📝 Script saved to debug directory: ${debugDir}`);
 
         // 1. Generate Audio (Remote Kokoro TTS)
         let audioDuration: number;
         try {
             // For scary stories, use a deeper/creepier voice
             const voice = niche === 'scary_stories' ? 'af_alloy' : 'af_bella';
+            this.log(`🎤 Generating audio with voice: ${voice}`);
             await this.tts.generateAudio(script, tempAudioPath, { voice, speed: 0.9 }); // Slightly slower for dramatic effect
-            this.log('Audio generated');
+            
+            // Verify audio file exists
+            if (!fs.existsSync(tempAudioPath)) {
+                throw new Error(`Audio file was not created: ${tempAudioPath}`);
+            }
+            
+            const audioSize = fs.statSync(tempAudioPath).size;
+            this.log(`✅ Audio generated: ${(audioSize / 1024).toFixed(2)} KB`);
+            
+            // Copy audio to debug directory
+            fs.copyFileSync(tempAudioPath, path.join(debugDir, 'audio.mp3'));
             
             // Get audio duration
             audioDuration = await this.getAudioDuration(tempAudioPath);
-            this.log(`Audio duration: ${audioDuration.toFixed(2)} seconds`);
-        } catch (e) {
-            this.log(`Audio generation failed: ${e}`);
-            return { status: 'failed' };
+            this.log(`⏱️  Audio duration: ${audioDuration.toFixed(2)} seconds`);
+            
+            // Save audio info to debug
+            fs.writeFileSync(path.join(debugDir, 'audio_info.txt'), 
+                `Duration: ${audioDuration.toFixed(2)}s\nSize: ${(audioSize / 1024).toFixed(2)} KB\nVoice: ${voice}`);
+        } catch (e: any) {
+            this.log(`❌ Audio generation failed: ${e.message}`);
+            fs.writeFileSync(path.join(debugDir, 'error_audio.txt'), `Error: ${e.message}\n${e.stack}`);
+            return { status: 'failed', error: `Audio generation failed: ${e.message}` };
         }
 
-        // 2. Generate Story Images
-        let scenes: Scene[] = [];
-        try {
-            this.log('Analyzing story and extracting scenes...');
-            scenes = await this.sceneAnalyzer.analyzeStory(script, audioDuration, niche);
-            this.log(`Extracted ${scenes.length} scenes`);
-
-            // Generate images for each scene
-            this.log('Generating images for scenes...');
-            for (let i = 0; i < scenes.length; i++) {
-                const scene = scenes[i];
-                const imagePath = path.join(imagesDir, `scene_${i}.png`);
-                
-                this.log(`Generating image ${i + 1}/${scenes.length}: ${scene.description.substring(0, 50)}...`);
-                
-                try {
-                    await this.imageGenerator.generateImage(scene.imagePrompt, imagePath, {
-                        style: niche === 'scary_stories' ? 'simple_cartoon' : 'simple_cartoon',
-                        width: 512,
-                        height: 512,
-                        numInferenceSteps: 30, // Increased for better quality
-                        negativePrompt: 'blurry, low quality, distorted, ugly, bad anatomy, watermark, incomplete, unfinished, pixelated, low resolution, corrupted, glitch, artifacts, noise, grainy, out of focus'
-                    });
-                    
-                    scene.imagePath = imagePath;
-                    
-                    // Save scene to database
-                    db.run(
-                        `INSERT INTO video_scenes (video_id, scene_index, timestamp, duration, description, image_prompt, image_path) 
-                         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                        [videoId, i, scene.timestamp, scene.duration, scene.description, scene.imagePrompt, imagePath]
-                    );
-                    
-                    this.log(`✓ Image ${i + 1} generated: ${imagePath}`);
-                } catch (error: any) {
-                    this.log(`✗ Failed to generate image ${i + 1}: ${error.message}`);
-                    // Continue with other images even if one fails
-                }
-            }
-        } catch (e) {
-            this.log(`Image generation failed: ${e}`);
-            // Fallback to background video if image generation fails
-            return await this.fallbackToBackgroundVideo(videoId, tempAudioPath, finalVideoPath, niche, script);
-        }
-
-        // 3. Check if we should use Drive videos or generated images
-        const useDriveVideos = task.payload.useDriveVideos === true && this.driveService;
+        // 2. Check if we should use Drive videos (skip image generation)
+        const useDriveVideos = task.payload.useDriveVideos === true;
         
         if (useDriveVideos) {
-            this.log('Using Google Drive videos...');
-            await this.renderWithDriveVideos(videoId, tempAudioPath, finalVideoPath, script, audioDuration, niche);
+            this.log('🎬 Using Drive videos - skipping image generation...');
+            try {
+                await this.renderWithDriveVideos(videoId, tempAudioPath, finalVideoPath, script, audioDuration, niche, debugDir);
+                
+                // Verify video was created
+                if (!fs.existsSync(finalVideoPath)) {
+                    throw new Error(`Video file was not created: ${finalVideoPath}`);
+                }
+                
+                const videoSize = fs.statSync(finalVideoPath).size;
+                this.log(`✅ Video created successfully: ${(videoSize / 1024 / 1024).toFixed(2)} MB`);
+                
+                // Copy final video to debug directory
+                fs.copyFileSync(finalVideoPath, path.join(debugDir, 'final_video.mp4'));
+                
+            } catch (e: any) {
+                this.log(`❌ Video rendering failed: ${e.message}`);
+                fs.writeFileSync(path.join(debugDir, 'error_video.txt'), `Error: ${e.message}\n${e.stack}`);
+                return { status: 'failed', error: `Video rendering failed: ${e.message}` };
+            }
         } else {
+            // 3. Generate Story Images
+            let scenes: Scene[] = [];
+            try {
+                this.log('Analyzing story and extracting scenes...');
+                scenes = await this.sceneAnalyzer.analyzeStory(script, audioDuration, niche);
+                this.log(`Extracted ${scenes.length} scenes`);
+
+                // Generate images for each scene
+                this.log('Generating images for scenes...');
+                for (let i = 0; i < scenes.length; i++) {
+                    const scene = scenes[i];
+                    const imagePath = path.join(imagesDir, `scene_${i}.png`);
+                    
+                    this.log(`Generating image ${i + 1}/${scenes.length}: ${scene.description.substring(0, 50)}...`);
+                    
+                    try {
+                        await this.imageGenerator.generateImage(scene.imagePrompt, imagePath, {
+                            style: niche === 'scary_stories' ? 'simple_cartoon' : 'simple_cartoon',
+                            width: 512,
+                            height: 512,
+                            numInferenceSteps: 30, // Increased for better quality
+                            negativePrompt: 'blurry, low quality, distorted, ugly, bad anatomy, watermark, incomplete, unfinished, pixelated, low resolution, corrupted, glitch, artifacts, noise, grainy, out of focus'
+                        });
+                        
+                        scene.imagePath = imagePath;
+                        
+                        // Save scene to database
+                        db.run(
+                            `INSERT INTO video_scenes (video_id, scene_index, timestamp, duration, description, image_prompt, image_path) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                            [videoId, i, scene.timestamp, scene.duration, scene.description, scene.imagePrompt, imagePath]
+                        );
+                        
+                        this.log(`✓ Image ${i + 1} generated: ${imagePath}`);
+                    } catch (error: any) {
+                        this.log(`✗ Failed to generate image ${i + 1}: ${error.message}`);
+                        // Continue with other images even if one fails
+                    }
+                }
+            } catch (e) {
+                this.log(`Image generation failed: ${e}`);
+                // Fallback to background video if image generation fails
+                return await this.fallbackToBackgroundVideo(videoId, tempAudioPath, finalVideoPath, niche, script);
+            }
+
             // 4. Render Video with Generated Images
             const scenesWithImages = scenes.filter((s): s is Scene & { imagePath: string } => !!s.imagePath);
             if (scenesWithImages.length > 0) {
@@ -120,11 +161,27 @@ export class VideoAgent extends BaseAgent {
             }
         }
 
+        // Verify final video exists
+        if (!fs.existsSync(finalVideoPath)) {
+            const errorMsg = `Final video file does not exist: ${finalVideoPath}`;
+            this.log(`❌ ${errorMsg}`);
+            fs.writeFileSync(path.join(debugDir, 'error_final.txt'), errorMsg);
+            return { status: 'failed', error: errorMsg };
+        }
+
+        const videoSize = fs.statSync(finalVideoPath).size;
+        this.log(`✅ Final video ready: ${finalVideoPath} (${(videoSize / 1024 / 1024).toFixed(2)} MB)`);
+        
+        // Save final info to debug
+        fs.writeFileSync(path.join(debugDir, 'final_info.txt'), 
+            `Video ID: ${videoId}\nNiche: ${niche}\nPath: ${finalVideoPath}\nSize: ${(videoSize / 1024 / 1024).toFixed(2)} MB\nAudio Duration: ${audioDuration.toFixed(2)}s`);
+
         // Update DB
         db.run(`UPDATE videos SET status = ?, file_path = ? WHERE id = ?`, 
             ['ready', finalVideoPath, videoId]);
 
-        return { videoId, filePath: finalVideoPath, status: 'completed' };
+        this.log(`📁 Debug files saved to: ${debugDir}`);
+        return { videoId, filePath: finalVideoPath, status: 'completed', debugDir };
     }
 
     private async fallbackToBackgroundVideo(
@@ -226,7 +283,7 @@ export class VideoAgent extends BaseAgent {
     }
 
     /**
-     * Render video using Google Drive video clips
+     * Render video using local video clips from assets/drive_videos
      */
     private async renderWithDriveVideos(
         videoId: number,
@@ -234,55 +291,75 @@ export class VideoAgent extends BaseAgent {
         outputPath: string,
         script: string,
         audioDuration: number,
-        niche: string
+        niche: string,
+        debugDir: string
     ): Promise<void> {
-        if (!this.driveService) {
-            console.warn('[VideoAgent] Google Drive service not initialized (missing FOLDER_ID?). Falling back to background video.');
-            return await this.fallbackToBackgroundVideo(videoId, audioPath, outputPath, niche, script);
-        }
-
         try {
-            // Sync videos from Drive
+            // Use local videos from assets/drive_videos
             const driveVideosPath = path.resolve(__dirname, `../../assets/drive_videos`);
-            const downloadedPaths = await this.driveService.syncVideos(driveVideosPath);
-            this.log(`Synced ${downloadedPaths.length} new videos from Drive`);
+            
+            if (!fs.existsSync(driveVideosPath)) {
+                const errorMsg = 'Drive videos directory does not exist';
+                this.log(`❌ ${errorMsg}`);
+                fs.writeFileSync(path.join(debugDir, 'error_drive_videos.txt'), errorMsg);
+                throw new Error(errorMsg);
+            }
 
-            // List all available videos
-            const allVideos = await this.driveService.listVideos();
+            // List all available video files
             const localVideoFiles = fs.readdirSync(driveVideosPath)
-                .filter(f => /\.(mp4|mov|avi)$/i.test(f))
-                .map(f => path.join(driveVideosPath, f));
+                .filter(f => /\.(mp4|mov|avi|mkv)$/i.test(f))
+                .map(f => path.join(driveVideosPath, f))
+                .filter(f => fs.existsSync(f));
 
             if (localVideoFiles.length === 0) {
-                this.log('No Drive videos available, falling back to background video');
-                return await this.fallbackToBackgroundVideo(videoId, audioPath, outputPath, niche, script);
+                const errorMsg = 'No video files found in drive_videos';
+                this.log(`❌ ${errorMsg}`);
+                fs.writeFileSync(path.join(debugDir, 'error_drive_videos.txt'), errorMsg);
+                throw new Error(errorMsg);
             }
 
-            // Create video segments from Drive videos
-            const videoSegments: VideoSegment[] = [];
-            let currentTime = 0;
-            const segmentDuration = audioDuration / Math.min(localVideoFiles.length, 5); // Use up to 5 clips
+            this.log(`✅ Found ${localVideoFiles.length} video file(s) in drive_videos`);
+            
+            // Save video list to debug
+            fs.writeFileSync(path.join(debugDir, 'drive_videos_list.txt'), 
+                localVideoFiles.map(f => `${f}\n`).join(''));
 
-            for (let i = 0; i < Math.min(localVideoFiles.length, 5) && currentTime < audioDuration; i++) {
-                const videoPath = localVideoFiles[i % localVideoFiles.length];
-                const duration = Math.min(segmentDuration, audioDuration - currentTime);
-                
-                videoSegments.push({
-                    path: videoPath,
-                    duration: duration,
-                    loop: true // Loop if video is shorter than needed
-                });
-                
-                currentTime += duration;
+            // Use the first video as background (loop it for the full audio duration)
+            const backgroundVideo = localVideoFiles[0];
+            this.log(`🎥 Using video: ${path.basename(backgroundVideo)}`);
+            
+            // Verify background video exists and get info
+            if (!fs.existsSync(backgroundVideo)) {
+                throw new Error(`Background video does not exist: ${backgroundVideo}`);
             }
+            
+            const bgVideoSize = fs.statSync(backgroundVideo).size;
+            this.log(`   Size: ${(bgVideoSize / 1024 / 1024).toFixed(2)} MB`);
 
             // Create subtitles from script
             const subtitles = VideoComposer.createSubtitlesFromText(script, audioDuration);
+            this.log(`📝 Generated ${subtitles.length} subtitle segments`);
+            
+            // Save subtitles to debug
+            const srtPath = path.join(debugDir, 'subtitles.srt');
+            this.generateSRT(subtitles, srtPath);
+            this.log(`   Saved SRT to: ${srtPath}`);
+            
+            // Save subtitle info
+            fs.writeFileSync(path.join(debugDir, 'subtitles_info.txt'), 
+                `Total segments: ${subtitles.length}\nTotal duration: ${audioDuration.toFixed(2)}s\n` +
+                subtitles.map((s, i) => `${i + 1}. ${s.startTime.toFixed(2)}s - ${(s.startTime + s.duration).toFixed(2)}s: ${s.text.substring(0, 50)}...`).join('\n'));
 
-            // Compose video
+            // Compose video with background video + audio + subtitles
+            this.log(`🎬 Composing video...`);
+            this.log(`   Output: ${outputPath}`);
+            this.log(`   Background: ${backgroundVideo}`);
+            this.log(`   Audio: ${audioPath}`);
+            this.log(`   Duration: ${audioDuration.toFixed(2)}s`);
+            
             await this.videoComposer.compose({
                 outputPath,
-                videoSegments,
+                backgroundVideo,
                 audioPath,
                 subtitles,
                 width: 1080,
@@ -290,11 +367,36 @@ export class VideoAgent extends BaseAgent {
                 fps: 30
             });
 
-            this.log('Video composed with Drive clips');
+            // Verify output exists
+            if (!fs.existsSync(outputPath)) {
+                throw new Error(`Composed video was not created: ${outputPath}`);
+            }
+            
+            this.log(`✅ Video composed successfully with Drive video as background`);
         } catch (error: any) {
-            this.log(`Failed to use Drive videos: ${error.message}, falling back...`);
-            return await this.fallbackToBackgroundVideo(videoId, audioPath, outputPath, niche, script);
+            this.log(`❌ Failed to use Drive videos: ${error.message}`);
+            fs.writeFileSync(path.join(debugDir, 'error_render.txt'), 
+                `Error: ${error.message}\nStack: ${error.stack}`);
+            throw error; // Re-throw to be caught by caller
         }
+    }
+    
+    private generateSRT(subtitles: SubtitleSegment[], outputPath: string) {
+        let srtContent = '';
+        subtitles.forEach((sub, index) => {
+            const startTime = this.formatTime(sub.startTime);
+            const endTime = this.formatTime(sub.startTime + sub.duration);
+            srtContent += `${index + 1}\n${startTime} --> ${endTime}\n${sub.text}\n\n`;
+        });
+        fs.writeFileSync(outputPath, srtContent);
+    }
+
+    private formatTime(seconds: number): string {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        const ms = Math.floor((seconds % 1) * 1000);
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')},${ms.toString().padStart(3, '0')}`;
     }
 
     private async renderVideoWithImages(

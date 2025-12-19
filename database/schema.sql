@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS story_history (
     theme TEXT,
     script_content TEXT,
     story_hash TEXT UNIQUE, -- Hash to prevent exact duplicates
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(niche, script_content)
 );
 
 CREATE TABLE IF NOT EXISTS trends (
@@ -60,7 +61,23 @@ CREATE TABLE IF NOT EXISTS hooks (
     hook_content TEXT NOT NULL,
     topic TEXT,
     video_id INTEGER,
+    hook_type TEXT,
+    word_count INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(video_id) REFERENCES videos(id)
+    FOREIGN KEY(video_id) REFERENCES videos(id),
+    UNIQUE(niche, hook_content)
+);
+
+CREATE TABLE IF NOT EXISTS facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    niche TEXT NOT NULL DEFAULT 'did_you_know',
+    fact_content TEXT NOT NULL,
+    theme TEXT,
+    fact_type TEXT,
+    word_count INTEGER,
+    video_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(video_id) REFERENCES videos(id),
+    UNIQUE(niche, fact_content)
 );
 

@@ -141,6 +141,15 @@ export class VideoComposer {
 
             // Process each video segment
             const segmentOutputs: string[] = [];
+            let subtitlesFilterPath = '';
+            
+            if (subtitles.length > 0) {
+                // Generate SRT file
+                const srtPath = outputPath.replace('.mp4', '.srt');
+                this.generateSRT(subtitles, srtPath);
+                subtitlesFilterPath = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+            }
+
             videoSegments.forEach((segment, index) => {
                 const inputIndex = videoInputIndex;
                 args.push('-i', segment.path);
@@ -174,26 +183,32 @@ export class VideoComposer {
                     segmentFilter += `loop=loop=${loopCount}:size=1:start=0,`;
                 }
 
-                segmentFilter += `setpts=PTS-STARTPTS[v${index}]`;
+                segmentFilter += `setpts=PTS-STARTPTS`;
+                
+                // Apply subtitles to segments if needed (though usually better on concatenated output)
+                // For segments composition, we'll apply subtitles after concat
+                
+                segmentFilter += `[v${index}]`;
                 filterParts.push(segmentFilter);
                 segmentOutputs.push(`[v${index}]`);
                 videoInputIndex++;
             });
 
             // Concatenate all video segments
+            let concatOutput = '[outv]';
             if (segmentOutputs.length > 0) {
-                filterParts.push(`${segmentOutputs.join('')}concat=n=${segmentOutputs.length}:v=1:a=0[outv]`);
-            }
-
-            // Add subtitles if provided
-            let finalVideoOutput = '[outv]';
-            if (subtitles.length > 0) {
-                const subtitleFilter = this.buildSubtitleFilter(subtitles, width, height, finalVideoOutput);
-                if (subtitleFilter) {
-                    filterParts.push(subtitleFilter);
-                    finalVideoOutput = '[outv]';
+                if (subtitlesFilterPath) {
+                    filterParts.push(`${segmentOutputs.join('')}concat=n=${segmentOutputs.length}:v=1:a=0[pre_sub]`);
+                    // Apply subtitles to the concatenated video
+                    filterParts.push(`[pre_sub]subtitles=${subtitlesFilterPath}:force_style='Fontsize=30,PrimaryColour=&H00FFFFFF,BackColour=&H40000000,BorderStyle=3,Outline=2,Shadow=0,Alignment=10,MarginV=20'[outv]`);
+                } else {
+                    filterParts.push(`${segmentOutputs.join('')}concat=n=${segmentOutputs.length}:v=1:a=0[outv]`);
                 }
             }
+
+            // Add subtitles if provided (old method removed, using filter chain above)
+            // let finalVideoOutput = '[outv]';
+            // if (subtitles.length > 0) { ... }
 
             // Build complete filter
             const filterComplex = filterParts.join(';');
@@ -307,7 +322,14 @@ export class VideoComposer {
                 
                 // Note: subtitles filter takes filename, and applies to the input video stream.
                 // We need to chain it after scaling.
-                filterParts.push(`${videoOutput}subtitles=${escapedSrtPath}:force_style='Fontsize=24,PrimaryColour=&H00FFFFFF,BackColour=&H80000000,BorderStyle=3,Outline=1,Shadow=0,MarginV=20'[outv]`);
+                // Style: Fontsize=24, Alignment=2 (Center/Bottom), MarginV=50 (Center vertically is tricky with SRT, but Alignment=10 is middle of screen in ASS)
+                // Let's stick to standard bottom-center for readability, but slightly higher up.
+                // Or use Alignment=10 (middle center) as requested.
+                // BackColour=&H80000000 (50% transparent black) -> &H40000000 (25% transparent) or &H00000000 (fully transparent)
+                // Requested: "pozadina teksta neka ne bude crna" -> Transparent or semi-transparent
+                // "tekst bude na sredini klipa" -> Alignment=10
+                
+                filterParts.push(`${videoOutput}subtitles=${escapedSrtPath}:force_style='Fontsize=30,PrimaryColour=&H00FFFFFF,BackColour=&H40000000,BorderStyle=3,Outline=2,Shadow=0,Alignment=10,MarginV=20'[outv]`);
                 videoOutput = '[outv]';
             } else {
                 filterParts.push(`${videoOutput}copy[outv]`);
@@ -359,17 +381,17 @@ export class VideoComposer {
             });
 
             ffmpeg.on('close', (code) => {
-                // Cleanup SRT
-                if (srtPath && fs.existsSync(srtPath)) {
-                    fs.unlinkSync(srtPath);
-                }
-
                 if (code === 0) {
                     console.log('\n[VideoComposer] Composition complete');
+                    // Don't delete SRT file - keep it for debugging
+                    // if (srtPath && fs.existsSync(srtPath)) {
+                    //     fs.unlinkSync(srtPath);
+                    // }
                     resolve(outputPath);
                 } else {
                     console.error('\n[VideoComposer] Error:', errorOutput.substring(errorOutput.length - 1000));
-                    reject(new Error(`FFmpeg exited with code ${code}`));
+                    // Keep SRT file on error for debugging
+                    reject(new Error(`FFmpeg exited with code ${code}. Check SRT file at: ${srtPath || 'N/A'}`));
                 }
             });
 
@@ -481,19 +503,22 @@ export class VideoComposer {
     ): SubtitleSegment[] {
         const words = text.split(' ');
         const wordCount = words.length;
-        const estimatedDuration = wordCount / wordsPerSecond;
         
-        // If estimated duration is close to total, use it
-        const actualDuration = Math.min(estimatedDuration, totalDuration);
-        const wordsPerSegment = Math.ceil(wordCount / Math.ceil(actualDuration / 3)); // 3 second segments
+        // Calculate dynamic segment length based on pacing
+        // Aim for 3-5 words per segment for better readability (requested "po par reci")
+        const targetWordsPerSegment = 4; 
         
         const segments: SubtitleSegment[] = [];
         let currentTime = 0;
         
-        for (let i = 0; i < words.length; i += wordsPerSegment) {
-            const segmentWords = words.slice(i, i + wordsPerSegment);
+        for (let i = 0; i < words.length; i += targetWordsPerSegment) {
+            const segmentWords = words.slice(i, i + targetWordsPerSegment);
             const segmentText = segmentWords.join(' ');
-            const segmentDuration = Math.min(3, totalDuration - currentTime);
+            
+            // Calculate duration proportional to word count
+            // We distribute totalDuration across all segments based on their word count relative to total words
+            const segmentWordCount = segmentWords.length;
+            const segmentDuration = (segmentWordCount / wordCount) * totalDuration;
             
             if (segmentDuration > 0 && segmentText.trim()) {
                 segments.push({

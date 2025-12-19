@@ -242,3 +242,6 @@ const subtitles: SubtitleSegment[] = [
 - Video klipovi se loop-uju ako su kraći od potrebnog
 
 
+
+
+
