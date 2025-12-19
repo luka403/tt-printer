@@ -56,7 +56,7 @@ Output ONLY the story/body text. No titles, no explanations.`;
             ? `Write the body of a TikTok video about "${topic}". The hook is: "${hook}". Continue from the hook with valuable content.`
             : `Write engaging ${this.niche} content about "${topic}". Make it 80-120 words long, inspiring and viral-worthy.`;
 
-        const story = await this.llm.generate(userPrompt, systemPrompt);
+        const story = await this.llm.generate(userPrompt, systemPrompt, { task: 'story' });
         const cleanedStory = story.trim().replace(/\n+/g, ' ').replace(/\s+/g, ' ');
 
         // Save to DB
@@ -74,6 +74,7 @@ Output ONLY the story/body text. No titles, no explanations.`;
         return { videoId, story: cleanedStory, title: topic };
     }
 }
+
 
 
 

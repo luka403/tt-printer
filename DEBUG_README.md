@@ -83,3 +83,4 @@ Svi koraci se loguju sa emoji-ima za lakše praćenje:
 - ⏱️ Timing information
 
 
+

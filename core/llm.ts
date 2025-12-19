@@ -1,6 +1,7 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
 import https from 'https';
+import http from 'http';
 
 dotenv.config();
 
@@ -9,6 +10,7 @@ export class LLMService {
     private apiKey: string;
     private model: string;
     private httpsAgent: https.Agent;
+    private httpAgent: http.Agent;
 
     constructor() {
         // Defaults to remote Python FastAPI server
@@ -18,16 +20,37 @@ export class LLMService {
         this.model = process.env.LLM_MODEL || 'llama3.1:8b';
         
         // HTTPS agent for remote APIs (skip SSL verification if needed)
-        this.httpsAgent = new https.Agent({ rejectUnauthorized: false });
+        this.httpsAgent = new https.Agent({ 
+            rejectUnauthorized: false,
+            keepAlive: true 
+        });
+
+        // HTTP agent for non-SSL remote APIs
+        this.httpAgent = new http.Agent({
+            keepAlive: true
+        });
     }
 
-    async generate(prompt: string, systemPrompt: string = "You are a helpful assistant.", options: { temperature?: number, max_tokens?: number } = {}): Promise<string> {
+    async generate(prompt: string, systemPrompt: string = "You are a helpful assistant.", options: { temperature?: number, max_tokens?: number, task?: string } = {}): Promise<string> {
         try {
-            // Updated to use the new simple endpoint structure based on user feedback
+            // Task mapping based on user request
+            // "fact" -> "phi3:mini"
+            // "hook" -> "phi3:mini"
+            // "motivation" -> "phi3:mini"
+            // "story" -> "mistral:7b-instruct-q4_0"
+            // Default to "fact" if not specified, or use the one passed in options
+            const task = options.task || 'fact';
+            
             // The prompt field contains both system and user instructions in a specific format
+            // But for the new simple endpoint, maybe just sending "prompt" is enough if the backend handles system prompts?
+            // The user's example shows:
+            // "prompt": "You generate ONLY the factual body ... \n\nTopic: human body..."
+            // It seems they are combining instructions into one prompt string.
+            // My previous code combined system + user into `fullPrompt`. I will keep that.
             const fullPrompt = `### SYSTEM\n${systemPrompt}\n\n### USER\n${prompt}`;
             
             const payload = {
+                task: task,
                 prompt: fullPrompt
             };
 
@@ -35,29 +58,38 @@ export class LLMService {
                 'Content-Type': 'application/json'
             };
 
-            // Use httpsAgent for HTTPS URLs
+            // Use httpsAgent for HTTPS URLs, httpAgent for HTTP
             const isHttps = this.baseUrl.startsWith('https://');
             const axiosConfig: any = {
                 headers,
-                timeout: 300000 // 5 minutes timeout for LLM generation (agent can be slow)
+                timeout: 0, // 0 = no timeout
+                maxContentLength: Infinity,
+                maxBodyLength: Infinity,
+                httpAgent: false, // Disable http agent (no keep-alive)
+                httpsAgent: false, // Disable https agent
+                proxy: false
             };
-
-            if (isHttps) {
-                axiosConfig.httpsAgent = this.httpsAgent;
-            }
-
-            // Using the specific endpoint provided: /generate-fact (or base url if different)
-            // If baseUrl includes /v1, we might need to adjust, but let's assume baseUrl is just http://IP:PORT for now based on recent context
-            // or we just append /generate-fact to the host. 
-            // The user provided http://54.84.200.147:8080/generate-fact
             
-            // Clean base URL to remove /v1 if present, as this seems to be a custom endpoint
+            // Clean base URL to remove /v1 if present
             const cleanBaseUrl = this.baseUrl.replace(/\/v1$/, '');
-            const endpoint = `${cleanBaseUrl}/generate-fact`;
+            const endpoint = `${cleanBaseUrl}/generate`;
 
-            console.log(`[LLMService] Sending request to: ${endpoint}`);
+            console.log(`\n[LLMService] ----------------------------------------------------------------`);
+            console.log(`[LLMService] 🕒 Request Start: ${new Date().toISOString()}`);
+            console.log(`[LLMService] 🌐 Endpoint: ${endpoint}`);
+            console.log(`[LLMService] ⚙️  Config: Timeout=${axiosConfig.timeout}, Agent=false`);
+            console.log(`[LLMService] 📤 Payload:`, JSON.stringify(payload, null, 2));
+            console.log(`[LLMService] ----------------------------------------------------------------\n`);
 
+            const startTime = Date.now();
             const response = await axios.post(endpoint, payload, axiosConfig);
+            const duration = (Date.now() - startTime) / 1000;
+
+            console.log(`\n[LLMService] ----------------------------------------------------------------`);
+            console.log(`[LLMService] 🕒 Response Received: ${new Date().toISOString()}`);
+            console.log(`[LLMService] ⏱️  Duration: ${duration.toFixed(2)}s`);
+            console.log(`[LLMService] 🔢 Status: ${response.status} ${response.statusText}`);
+            console.log(`[LLMService] ----------------------------------------------------------------\n`);
 
             // The response format from the simple endpoint might be different. 
             // Assuming it returns a JSON with 'fact' or 'text' or just the raw text based on "generate-fact".
@@ -95,16 +127,21 @@ export class LLMService {
             return generatedText;
         } catch (error: any) {
             console.error("\n" + "=".repeat(70));
-            console.error("❌ LLM Generation Error:", error.message);
+            console.error(`❌ LLM Generation Error [${new Date().toISOString()}]`);
+            console.error("Message:", error.message);
+            console.error("Code:", error.code);
+            
             if (error.response) {
-                console.error("Status:", error.response.status);
-                console.error("Response:", error.response.data);
+                console.error("Server Status:", error.response.status);
+                console.error("Server Headers:", JSON.stringify(error.response.headers, null, 2));
+                console.error("Server Data:", JSON.stringify(error.response.data, null, 2));
+            } else if (error.request) {
+                console.error("No response received from server.");
             }
             console.error("=".repeat(70) + "\n");
             
             // Instead of returning mock, throw error so agents can handle it properly
-            // But for now, we'll still return a message but make it clear it's an error
-            throw new Error(`LLM service unavailable: ${error.message}. Please check your LLM API connection.`);
+            throw new Error(`LLM service unavailable: ${error.message}.`);
         }
     }
 }

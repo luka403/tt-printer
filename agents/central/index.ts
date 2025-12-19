@@ -57,24 +57,16 @@ export class CentralAgent extends BaseAgent {
                 id: 'task-facts', type: 'content', payload: {}, status: 'pending'
             });
             
-            // Generate hook for the fact
-            const hookAgent = this.hookAgents.get('did_you_know');
-            if (hookAgent) {
-                const hookResult = await hookAgent.processTask({
-                    id: 'task-hook', type: 'hook', 
-                    payload: { 
-                        topic: factsResult.title, 
-                        storyContext: factsResult.fact,
-                        videoId: factsResult.videoId
-                    }, 
-                    status: 'pending'
-                });
-                fullScript = `${hookResult.hook} ${factsResult.fact}`;
-                scriptResult = { ...factsResult, script: fullScript, hook: hookResult.hook };
-            } else {
-                fullScript = factsResult.fact;
-                scriptResult = { ...factsResult, script: fullScript };
-            }
+            // Hook is already selected by FactsAgent
+            fullScript = factsResult.fullScript;
+            scriptResult = { 
+                ...factsResult, 
+                script: fullScript, 
+                // Ensure these are passed correctly
+                hook: factsResult.hook,
+                fact: factsResult.fact
+            };
+            
             console.log(`✅ Fact ready for video production\n`);
         } else {
             // For other niches, use Hook + Story agents
@@ -151,7 +143,8 @@ export class CentralAgent extends BaseAgent {
                 videoId: scriptResult.videoId, 
                 script: scriptResult.script || scriptResult.story || scriptResult.fact, 
                 niche,
-                useDriveVideos: true // Use Drive videos from assets/drive_videos (skip image generation)
+                useDriveVideos: true, // Use Drive videos from assets/drive_videos (skip image generation)
+                hook: scriptResult.hook // Pass hook text for special subtitle styling
             }, 
             status: 'pending'
         });

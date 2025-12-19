@@ -4,12 +4,27 @@ import { db } from '../../core/db';
 
 export class FactsAgent extends BaseAgent {
     private llm: LLMService;
+    
+    // Predefined hooks for consistent viral performance
+    private readonly FACT_HOOK_POOL = [
+        "Nobody tells you this.",
+        "Most people don’t know this.",
+        "This sounds fake, but it’s real.",
+        "Your body does this automatically.",
+        "This happens without you noticing.",
+        "Almost nobody learns this in school.",
+        "Your brain does this every day.",
+        "This is happening inside you right now.",
+        "You’ve experienced this without realizing it.",
+        "This is way more important than you think."
+    ];
+
     private readonly fallbackFacts = [
-        "Did you know your brain uses more energy resting than your muscles?",
-        "Did you know octopuses have three hearts and blue blood?",
-        "Did you know honey never spoils? Archaeologists have found 3000-year-old honey that's still edible.",
-        "Did you know bananas are berries, but strawberries aren't?",
-        "Did you know a day on Venus is longer than its year?"
+        "your brain uses more energy resting than your muscles.",
+        "octopuses have three hearts and blue blood.",
+        "honey never spoils. Archaeologists have found 3000-year-old honey that's still edible.",
+        "bananas are berries, but strawberries aren't.",
+        "a day on Venus is longer than its year."
     ];
 
     constructor() {
@@ -20,20 +35,6 @@ export class FactsAgent extends BaseAgent {
     async processTask(task: AgentTask): Promise<any> {
         this.log(`Generating "Did You Know" fact...`);
 
-        // Get previous facts to avoid repetition (LIMIT 15 for better memory window)
-        const previousFacts = db.query(`
-            SELECT script_content, theme 
-            FROM story_history 
-            WHERE niche = ? 
-            ORDER BY created_at DESC 
-            LIMIT 15
-        `, ['did_you_know']) as any[];
-
-        const previousFactsText = previousFacts.length > 0 
-            ? previousFacts.map((s: any) => `- ${s.script_content}`).join('\n')
-            : 'None yet.';
-
-        // Fact type rotation for viral variety
         const factTypes = [
             'counterintuitive',
             'myth busting',
@@ -47,154 +48,121 @@ export class FactsAgent extends BaseAgent {
         this.log(`📌 Using fact type: ${factType}`);
 
         const themes = [
-            'science',
-            'history',
-            'nature',
-            'animals',
-            'space',
-            'human body',
-            'technology',
-            'psychology',
-            'food',
-            'culture'
+            'science', 'history', 'nature', 'animals', 'space',
+            'human body', 'technology', 'psychology', 'food', 'culture'
         ];
 
         const randomTheme = themes[Math.floor(Math.random() * themes.length)];
 
-        // Retry mechanism (3 attempts)
-        let fact: string | null = null;
-        let cleanedFact: string | null = null;
+        // Retry mechanism
+        let factBody: string | null = null;
         let attempts = 0;
         const maxAttempts = 3;
 
-        while (attempts < maxAttempts && !cleanedFact) {
+        // Select hook programmatically
+        const selectedHook = this.FACT_HOOK_POOL[Math.floor(Math.random() * this.FACT_HOOK_POOL.length)];
+
+        while (attempts < maxAttempts && !factBody) {
             attempts++;
             this.log(`🔄 Attempt ${attempts}/${maxAttempts}...`);
 
             try {
-                const systemPrompt = `You are an expert at creating "Did You Know" facts for TikTok.
-Write engaging, surprising, and educational facts that will go viral.
+                // EXTREMELY SIMPLE PROMPT to avoid LLM crash
+                const systemPrompt = `You generate ONLY the factual body of a TikTok "Did You Know" video.
 
-FACT STYLE: ${factType}
+Rules:
+- Start directly with the fact content (e.g. "honey never spoils...")
+- Do NOT include the "Did you know" phrase at the start
+- Do NOT write a hook
+- Do NOT add titles or formatting
+- Write 2–3 sentences
+- Target 50–90 words
+- Natural spoken English
+- Widely accepted true facts only
+- No speculation`;
 
-STRUCTURE:
-- Hook: Start with "Did you know..." or "Most people don't know..." (REQUIRED)
-- Fact: Present the surprising fact clearly
-- Context: Add brief context or why it matters (optional)
--  optimal for 20-35 seconds video
+                const userPrompt = `Topic: ${randomTheme}\nStyle: ${factType}\n\nWrite a surprising but true fact.`;
 
-REQUIREMENTS:
-- Must be TRUE and verifiable (only use widely known, well-established facts)
-- Should be surprising or counterintuitive
-- Must be interesting and shareable
-- Keep it concise and punchy
-- Make people want to share it
-- Avoid exact numbers, dates, or statistics unless widely known
-- Do not speculate or invent research
-
-AVOID REPETITION:
-Do NOT write facts similar to these previous ones:
-${previousFactsText}
-
-Create something NEW and UNIQUE.
-
-Output ONLY the fact text. No titles, no explanations.`;
-
-                const userPrompt = `Write a "Did You Know" fact about ${randomTheme} using the ${factType} style. Make it surprising, true, and viral-worthy. Target 50-90 words.`;
-
-                fact = await this.llm.generate(userPrompt, systemPrompt);
-                cleanedFact = fact.trim().replace(/\n+/g, ' ').replace(/\s+/g, ' ');
-
-                // 1️⃣ DUŽINSKA VALIDACIJA
-                const words = cleanedFact.split(' ').filter(w => w.length > 0);
-                const wordCount = words.length;
+                factBody = await this.llm.generate(userPrompt, systemPrompt, { task: 'fact' });
                 
-                if (wordCount < 50 || wordCount > 100) {
-                    throw new Error(`Invalid fact length: ${wordCount} words (required: 50-100)`);
+                // Cleanup: Remove quotes, newlines, extra spaces
+                factBody = factBody.trim().replace(/\n+/g, ' ').replace(/\s+/g, ' ').replace(/^"|"$/g, '');
+                
+                // Cleanup: Remove "Did you know" if LLM added it despite instructions
+                if (factBody.toLowerCase().startsWith('did you know')) {
+                    factBody = factBody.substring(12).trim();
+                    if (factBody.startsWith('that')) factBody = factBody.substring(4).trim();
                 }
 
-                // 2️⃣ HOOK VALIDACIJA (PRVA REČENICA)
-                const lowerFact = cleanedFact.toLowerCase();
-                if (
-                    !lowerFact.startsWith('did you know') &&
-                    !lowerFact.startsWith('most people don\'t know') &&
-                    !lowerFact.startsWith('most people don\'t know that')
-                ) {
-                    throw new Error(`Fact does not start with a hook phrase. Got: "${cleanedFact.substring(0, 30)}..."`);
+                // Validate length
+                const words = factBody.split(' ').filter(w => w.length > 0);
+                if (words.length < 30 || words.length > 120) {
+                    throw new Error(`Invalid fact length: ${words.length} words (target 50-90)`);
                 }
 
-                // Check for duplicates in DB
+                // Check duplicates (simple check)
                 try {
                     const existing = db.get(`SELECT id FROM facts WHERE niche = ? AND fact_content = ?`, 
-                        ['did_you_know', cleanedFact]) as any;
-                    if (existing) {
-                        throw new Error('Duplicate fact detected in database');
-                    }
+                        ['did_you_know', factBody]) as any;
+                    if (existing) throw new Error('Duplicate fact detected');
                 } catch (dbError: any) {
-                    if (dbError.message.includes('UNIQUE constraint')) {
-                        throw new Error('Duplicate fact detected (UNIQUE constraint)');
-                    }
-                    // If it's a different DB error, continue
+                    if (dbError.message.includes('UNIQUE constraint')) throw new Error('Duplicate fact detected');
                 }
 
-                this.log(`✅ Validation passed: ${wordCount} words, starts with hook`);
+                this.log(`✅ Validation passed`);
 
             } catch (error: any) {
                 this.log(`❌ Attempt ${attempts} failed: ${error.message}`);
-                cleanedFact = null;
+                factBody = null;
                 
                 if (attempts === maxAttempts) {
-                    // Use fallback on final attempt
-                    this.log(`⚠️  All attempts failed, using fallback fact`);
-                    cleanedFact = this.fallbackFacts[Math.floor(Math.random() * this.fallbackFacts.length)];
-                    const words = cleanedFact.split(' ').filter(w => w.length > 0);
-                    const wordCount = words.length;
-                    this.log(`📊 Fallback fact: ${wordCount} words`);
+                    this.log(`⚠️  All attempts failed, using fallback`);
+                    factBody = this.fallbackFacts[Math.floor(Math.random() * this.fallbackFacts.length)];
                 }
             }
         }
 
-        if (!cleanedFact) {
-            throw new Error('Failed to generate fact after all attempts and fallbacks');
+        if (!factBody) {
+            factBody = "honey never spoils. Archaeologists have found 3000-year-old honey that's still edible.";
         }
 
-        const words = cleanedFact.split(' ').filter(w => w.length > 0);
-        const wordCount = words.length;
+        // Combine Hook + Fact
+        const fullScript = `${selectedHook} Did you know ${factBody}`;
+        const wordCount = fullScript.split(' ').length;
 
-        // Save to facts table
+        // Save to DB
         let videoId: number;
         try {
             const result = db.run(`INSERT INTO facts (niche, fact_content, theme, fact_type, word_count) VALUES (?, ?, ?, ?, ?)`, 
-                ['did_you_know', cleanedFact, randomTheme, factType, wordCount]);
+                ['did_you_know', factBody, randomTheme, factType, wordCount]);
             
-            // Also save to videos table for pipeline compatibility
             const videoResult = db.run(`INSERT INTO videos (niche, title, script_content, status, theme) VALUES (?, ?, ?, ?, ?)`, 
-                ['did_you_know', `Did You Know: ${randomTheme}`, cleanedFact, 'scripted', randomTheme]);
+                ['did_you_know', `Did You Know: ${randomTheme}`, fullScript, 'scripted', randomTheme]);
             
             videoId = Number(videoResult.lastInsertRowid);
             
-            // Save to story history
             db.run(`INSERT INTO story_history (niche, theme, script_content) VALUES (?, ?, ?)`, 
-                ['did_you_know', randomTheme, cleanedFact]);
-        } catch (dbError: any) {
-            if (dbError.message.includes('UNIQUE constraint')) {
-                this.log(`⚠️  Duplicate detected, retrying with new theme...`);
-                // Retry with different theme
-                return this.processTask(task);
-            }
-            throw dbError;
+                ['did_you_know', randomTheme, factBody]);
+        } catch (dbError) {
+            this.log('⚠️ DB Error (likely duplicate), restarting task...');
+            return this.processTask(task);
         }
         
         console.log("\n" + "=".repeat(70));
-        console.log(`💡 DID YOU KNOW FACT (ID: ${videoId}, Theme: ${randomTheme}, Type: ${factType})`);
+        console.log(`💡 DID YOU KNOW FACT (ID: ${videoId}, Theme: ${randomTheme})`);
+        console.log(`🪝 Hook: ${selectedHook}`);
+        console.log(`📝 Body: Did you know ${factBody}`);
         console.log("=".repeat(70));
-        console.log(cleanedFact);
-        console.log("=".repeat(70));
-        console.log(`📊 Length: ${cleanedFact.length} chars, ${wordCount} words`);
-        console.log(`✅ Validations: Length ✓, Hook ✓, Unique ✓\n`);
         
-        this.log(`Fact generated (ID ${videoId}): "${cleanedFact.substring(0, 30)}..." (${wordCount} words, ${factType})`);
-
-        return { videoId, fact: cleanedFact, title: randomTheme, niche: 'did_you_know', factType, wordCount };
+        return { 
+            videoId, 
+            fact: factBody, 
+            hook: selectedHook, 
+            fullScript,
+            title: randomTheme, 
+            niche: 'did_you_know', 
+            factType, 
+            wordCount 
+        };
     }
 }

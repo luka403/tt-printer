@@ -65,7 +65,7 @@ export class RemoteKokoroTTS implements TTSService {
                     'Referer': `${this.apiBase}/web/`,
                     'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36'
                 },
-                timeout: 60000, // 60 seconds timeout
+                timeout: 300000, // Increased timeout to 5 minutes
                 maxContentLength: Infinity,
                 maxBodyLength: Infinity
             });

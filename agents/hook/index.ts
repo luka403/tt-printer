@@ -99,7 +99,7 @@ Output ONLY the hook text. No explanations, no quotes.`;
                     ? `Write a viral hook for this story about "${topic}" using the ${hookType} style:\n\n${storyContext}\n\nCreate a hook that makes people want to watch the full story. Target 5-12 words.`
                     : `Write a viral hook about "${topic}" using the ${hookType} style. Make it catchy and attention-grabbing. Target 5-12 words.`;
 
-                hook = await this.llm.generate(userPrompt, systemPrompt);
+                hook = await this.llm.generate(userPrompt, systemPrompt, { task: 'hook' });
                 cleanedHook = hook.trim().replace(/\n+/g, ' ').replace(/\s+/g, ' ');
 
                 // 1️⃣ DUŽINSKI GUARD

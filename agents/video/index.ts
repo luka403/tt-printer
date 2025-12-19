@@ -86,7 +86,7 @@ export class VideoAgent extends BaseAgent {
         if (useDriveVideos) {
             this.log('🎬 Using Drive videos - skipping image generation...');
             try {
-                await this.renderWithDriveVideos(videoId, tempAudioPath, finalVideoPath, script, audioDuration, niche, debugDir);
+                await this.renderWithDriveVideos(videoId, tempAudioPath, finalVideoPath, script, audioDuration, niche, debugDir, task.payload.hook || '');
                 
                 // Verify video was created
                 if (!fs.existsSync(finalVideoPath)) {
@@ -282,6 +282,35 @@ export class VideoAgent extends BaseAgent {
         });
     }
 
+    private async getVideoDuration(videoPath: string): Promise<number> {
+        return new Promise((resolve, reject) => {
+            const ffprobe = spawn('ffprobe', [
+                '-i', videoPath,
+                '-show_entries', 'format=duration',
+                '-v', 'quiet',
+                '-of', 'csv=p=0'
+            ]);
+
+            let duration = '';
+            ffprobe.stdout.on('data', (data: Buffer) => {
+                duration += data.toString();
+            });
+
+            ffprobe.on('close', (code) => {
+                if (code === 0 && duration) {
+                    const seconds = parseFloat(duration.trim());
+                    resolve(seconds);
+                } else {
+                    reject(new Error(`Could not get video duration for ${videoPath}`));
+                }
+            });
+
+            ffprobe.on('error', (error) => {
+                reject(error);
+            });
+        });
+    }
+
     /**
      * Render video using local video clips from assets/drive_videos
      */
@@ -292,7 +321,8 @@ export class VideoAgent extends BaseAgent {
         script: string,
         audioDuration: number,
         niche: string,
-        debugDir: string
+        debugDir: string,
+        hookText: string = ''
     ): Promise<void> {
         try {
             // Use local videos from assets/drive_videos
@@ -324,9 +354,9 @@ export class VideoAgent extends BaseAgent {
             fs.writeFileSync(path.join(debugDir, 'drive_videos_list.txt'), 
                 localVideoFiles.map(f => `${f}\n`).join(''));
 
-            // Use the first video as background (loop it for the full audio duration)
-            const backgroundVideo = localVideoFiles[0];
-            this.log(`🎥 Using video: ${path.basename(backgroundVideo)}`);
+            // Pick ONE video at random
+            const backgroundVideo = localVideoFiles[Math.floor(Math.random() * localVideoFiles.length)];
+            this.log(`🎥 Selected background video: ${path.basename(backgroundVideo)}`);
             
             // Verify background video exists and get info
             if (!fs.existsSync(backgroundVideo)) {
@@ -336,8 +366,34 @@ export class VideoAgent extends BaseAgent {
             const bgVideoSize = fs.statSync(backgroundVideo).size;
             this.log(`   Size: ${(bgVideoSize / 1024 / 1024).toFixed(2)} MB`);
 
+            // Get video duration
+            const videoDuration = await this.getVideoDuration(backgroundVideo);
+            this.log(`   Video Duration: ${videoDuration.toFixed(2)}s`);
+            this.log(`   Audio Duration: ${audioDuration.toFixed(2)}s`);
+
+            // Logic: Calculate start time and loop setting
+            let startTime = 0;
+            let loopBackground = false;
+
+            if (videoDuration > audioDuration) {
+                // Case 1: Video > Audio
+                // Pick random start_time between 0 and (video_duration - audio_duration)
+                const maxStartTime = videoDuration - audioDuration;
+                startTime = Math.random() * maxStartTime;
+                loopBackground = false;
+                this.log(`   Condition: Video > Audio. Cutting segment from ${startTime.toFixed(2)}s to ${(startTime + audioDuration).toFixed(2)}s`);
+            } else {
+                // Case 2: Video <= Audio
+                // Loop video seamlessly until it covers full audio duration
+                startTime = 0;
+                loopBackground = true;
+                this.log(`   Condition: Video <= Audio. Looping background video.`);
+            }
+
             // Create subtitles from script
-            const subtitles = VideoComposer.createSubtitlesFromText(script, audioDuration);
+            this.log(`📝 Generating subtitles with Hook: "${hookText.substring(0, 20)}..."`);
+            
+            const subtitles = VideoComposer.createSubtitlesFromText(script, audioDuration, hookText);
             this.log(`📝 Generated ${subtitles.length} subtitle segments`);
             
             // Save subtitles to debug
@@ -364,7 +420,9 @@ export class VideoAgent extends BaseAgent {
                 subtitles,
                 width: 1080,
                 height: 1920,
-                fps: 30
+                fps: 30,
+                backgroundStartTime: startTime,
+                loopBackground: loopBackground
             });
 
             // Verify output exists

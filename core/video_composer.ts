@@ -38,6 +38,8 @@ export interface VideoCompositionOptions {
     audioVolume?: number; // 0.0 to 1.0
     videoCodec?: string;
     audioCodec?: string;
+    backgroundStartTime?: number; // Start time for background video
+    loopBackground?: boolean; // Whether to loop background video
 }
 
 export class VideoComposer {
@@ -56,7 +58,9 @@ export class VideoComposer {
             fps = 30,
             audioVolume = 1.0,
             videoCodec = 'libx264',
-            audioCodec = 'aac'
+            audioCodec = 'aac',
+            backgroundStartTime = 0,
+            loopBackground = false
         } = options;
 
         // Ensure output directory exists
@@ -101,7 +105,9 @@ export class VideoComposer {
                 fps,
                 audioVolume,
                 videoCodec,
-                audioCodec
+                audioCodec,
+                startTime: backgroundStartTime,
+                loop: loopBackground
             });
         }
 
@@ -199,16 +205,12 @@ export class VideoComposer {
             if (segmentOutputs.length > 0) {
                 if (subtitlesFilterPath) {
                     filterParts.push(`${segmentOutputs.join('')}concat=n=${segmentOutputs.length}:v=1:a=0[pre_sub]`);
-                    // Apply subtitles to the concatenated video
-                    filterParts.push(`[pre_sub]subtitles=${subtitlesFilterPath}:force_style='Fontsize=30,PrimaryColour=&H00FFFFFF,BackColour=&H40000000,BorderStyle=3,Outline=2,Shadow=0,Alignment=10,MarginV=20'[outv]`);
+                    // Apply subtitles to the concatenated video with improved style
+                    filterParts.push(`[pre_sub]subtitles=${subtitlesFilterPath}:force_style='Fontname=Arial,Fontsize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=10,MarginL=40,MarginR=40,MarginV=50'[outv]`);
                 } else {
                     filterParts.push(`${segmentOutputs.join('')}concat=n=${segmentOutputs.length}:v=1:a=0[outv]`);
                 }
             }
-
-            // Add subtitles if provided (old method removed, using filter chain above)
-            // let finalVideoOutput = '[outv]';
-            // if (subtitles.length > 0) { ... }
 
             // Build complete filter
             const filterComplex = filterParts.join(';');
@@ -289,15 +291,25 @@ export class VideoComposer {
         audioVolume: number;
         videoCodec: string;
         audioCodec: string;
+        startTime?: number;
+        loop?: boolean;
     }): Promise<string> {
-        const { outputPath, backgroundVideo, audioPath, audioDuration, subtitles, width, height, fps, audioVolume, videoCodec, audioCodec } = options;
+        const { outputPath, backgroundVideo, audioPath, audioDuration, subtitles, width, height, fps, audioVolume, videoCodec, audioCodec, startTime = 0, loop = false } = options;
 
         return new Promise((resolve, reject) => {
             const args: string[] = [];
             const filterParts: string[] = [];
 
-            // Add background video (loop if needed)
-            args.push('-stream_loop', '-1', '-i', backgroundVideo);
+            // Add background video options
+            if (loop) {
+                args.push('-stream_loop', '-1');
+            }
+            
+            if (startTime > 0) {
+                args.push('-ss', startTime.toString());
+            }
+
+            args.push('-i', backgroundVideo);
 
             // Add audio if provided
             if (audioPath && fs.existsSync(audioPath)) {
@@ -317,19 +329,9 @@ export class VideoComposer {
                 this.generateSRT(subtitles, srtPath);
                 
                 // Use subtitles filter (requires libass)
-                // Escape path for filter
                 const escapedSrtPath = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
                 
-                // Note: subtitles filter takes filename, and applies to the input video stream.
-                // We need to chain it after scaling.
-                // Style: Fontsize=24, Alignment=2 (Center/Bottom), MarginV=50 (Center vertically is tricky with SRT, but Alignment=10 is middle of screen in ASS)
-                // Let's stick to standard bottom-center for readability, but slightly higher up.
-                // Or use Alignment=10 (middle center) as requested.
-                // BackColour=&H80000000 (50% transparent black) -> &H40000000 (25% transparent) or &H00000000 (fully transparent)
-                // Requested: "pozadina teksta neka ne bude crna" -> Transparent or semi-transparent
-                // "tekst bude na sredini klipa" -> Alignment=10
-                
-                filterParts.push(`${videoOutput}subtitles=${escapedSrtPath}:force_style='Fontsize=30,PrimaryColour=&H00FFFFFF,BackColour=&H40000000,BorderStyle=3,Outline=2,Shadow=0,Alignment=10,MarginV=20'[outv]`);
+                filterParts.push(`${videoOutput}subtitles=${escapedSrtPath}:force_style='Fontname=Arial,Fontsize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=10,MarginL=40,MarginR=40,MarginV=50'[outv]`);
                 videoOutput = '[outv]';
             } else {
                 filterParts.push(`${videoOutput}copy[outv]`);
@@ -383,14 +385,9 @@ export class VideoComposer {
             ffmpeg.on('close', (code) => {
                 if (code === 0) {
                     console.log('\n[VideoComposer] Composition complete');
-                    // Don't delete SRT file - keep it for debugging
-                    // if (srtPath && fs.existsSync(srtPath)) {
-                    //     fs.unlinkSync(srtPath);
-                    // }
                     resolve(outputPath);
                 } else {
                     console.error('\n[VideoComposer] Error:', errorOutput.substring(errorOutput.length - 1000));
-                    // Keep SRT file on error for debugging
                     reject(new Error(`FFmpeg exited with code ${code}. Check SRT file at: ${srtPath || 'N/A'}`));
                 }
             });
@@ -415,49 +412,6 @@ export class VideoComposer {
         const date = new Date(0);
         date.setMilliseconds(seconds * 1000);
         return date.toISOString().substr(11, 12).replace('.', ',');
-    }
-
-    /**
-     * Build subtitle filter for FFmpeg
-     */
-    private buildSubtitleFilter(subtitles: SubtitleSegment[], width: number, height: number, videoInput: string): string {
-        if (subtitles.length === 0) return '';
-
-        // Chain multiple drawtext filters for each subtitle segment
-        const drawtextFilters: string[] = [];
-
-        subtitles.forEach((subtitle, index) => {
-            const style = subtitle.style || {};
-            const fontSize = style.fontSize || 60;
-            const fontColor = style.fontColor || 'white';
-            const backgroundColor = style.backgroundColor || 'black@0.5';
-            const position = style.position || 'bottom';
-
-            // Calculate Y position
-            let yPos = height - 200; // Default bottom
-            if (position === 'top') yPos = 100;
-            else if (position === 'center') yPos = height / 2;
-
-            // Escape text for FFmpeg
-            const escapedText = subtitle.text
-                .replace(/\\/g, '\\\\')
-                .replace(/:/g, '\\:')
-                .replace(/'/g, "\\'")
-                .replace(/\[/g, '\\[')
-                .replace(/\]/g, '\\]')
-                .replace(/\n/g, ' ');
-
-            // Build drawtext filter - chain them together
-            // First one takes video input, subsequent ones take previous subtitle output
-            const inputLabel = index === 0 ? videoInput : `[sub${index - 1}]`;
-            const outputLabel = index === subtitles.length - 1 ? '[outv]' : `[sub${index}]`;
-            
-            const drawtext = `${inputLabel}drawtext=text='${escapedText}':fontsize=${fontSize}:fontcolor=${fontColor}:box=1:boxcolor=${backgroundColor}:boxborderw=10:x=(w-text_w)/2:y=${yPos}:enable='between(t,${subtitle.startTime},${subtitle.startTime + subtitle.duration})'${outputLabel}`;
-            
-            drawtextFilters.push(drawtext);
-        });
-
-        return drawtextFilters.join(';');
     }
 
     /**
@@ -499,7 +453,7 @@ export class VideoComposer {
     static createSubtitlesFromText(
         text: string,
         totalDuration: number,
-        wordsPerSecond: number = 2.5
+        hookText: string = ''
     ): SubtitleSegment[] {
         const words = text.split(' ');
         const wordCount = words.length;
@@ -511,6 +465,10 @@ export class VideoComposer {
         const segments: SubtitleSegment[] = [];
         let currentTime = 0;
         
+        // Audio sync offset: start subtitles slightly earlier (-0.2s) to match human perception
+        // Humans read slightly ahead of hearing
+        const offset = -0.15; 
+        
         for (let i = 0; i < words.length; i += targetWordsPerSegment) {
             const segmentWords = words.slice(i, i + targetWordsPerSegment);
             const segmentText = segmentWords.join(' ');
@@ -521,9 +479,12 @@ export class VideoComposer {
             const segmentDuration = (segmentWordCount / wordCount) * totalDuration;
             
             if (segmentDuration > 0 && segmentText.trim()) {
+                // Apply offset to start time, but ensure it's not negative
+                const startTime = Math.max(0, currentTime + offset);
+                
                 segments.push({
                     text: segmentText,
-                    startTime: currentTime,
+                    startTime: startTime,
                     duration: segmentDuration
                 });
                 currentTime += segmentDuration;
@@ -533,4 +494,3 @@ export class VideoComposer {
         return segments;
     }
 }
-
