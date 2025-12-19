@@ -455,41 +455,143 @@ export class VideoComposer {
         totalDuration: number,
         hookText: string = ''
     ): SubtitleSegment[] {
-        const words = text.split(' ');
-        const wordCount = words.length;
+        // Clean and split words
+        const cleanText = (t: string) => t.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+        const allWords = cleanText(text).split(' ');
         
-        // Calculate dynamic segment length based on pacing
-        // Aim for 3-5 words per segment for better readability (requested "po par reci")
-        const targetWordsPerSegment = 4; 
-        
+        // Identify hook words
+        let hookWords: string[] = [];
+        if (hookText) {
+            const cleanHook = cleanText(hookText);
+            const hookWordsTemp = cleanHook.split(' ');
+            
+            // Try to match hook at the beginning
+            let matchCount = 0;
+            for(let i=0; i<hookWordsTemp.length; i++) {
+                if (allWords[i] && allWords[i].toLowerCase().includes(hookWordsTemp[i].toLowerCase().replace(/[^\w]/g,''))) {
+                    matchCount++;
+                }
+            }
+            if (matchCount > hookWordsTemp.length * 0.5) {
+                hookWords = allWords.slice(0, hookWordsTemp.length);
+            }
+        }
+
         const segments: SubtitleSegment[] = [];
         let currentTime = 0;
         
-        // Audio sync offset: start subtitles slightly earlier (-0.2s) to match human perception
-        // Humans read slightly ahead of hearing
-        const offset = -0.15; 
-        
-        for (let i = 0; i < words.length; i += targetWordsPerSegment) {
-            const segmentWords = words.slice(i, i + targetWordsPerSegment);
-            const segmentText = segmentWords.join(' ');
-            
-            // Calculate duration proportional to word count
-            // We distribute totalDuration across all segments based on their word count relative to total words
-            const segmentWordCount = segmentWords.length;
-            const segmentDuration = (segmentWordCount / wordCount) * totalDuration;
-            
-            if (segmentDuration > 0 && segmentText.trim()) {
-                // Apply offset to start time, but ensure it's not negative
-                const startTime = Math.max(0, currentTime + offset);
-                
-                segments.push({
-                    text: segmentText,
-                    startTime: startTime,
-                    duration: segmentDuration
-                });
-                currentTime += segmentDuration;
+        // Settings requested by user
+        // WORDS_PER_SUBTITLE = 3 (Range 2-4)
+        const targetWordsPerSegment = 3; 
+        // SUBTITLE_DELAY_MS = 150 (+150ms delay)
+        // If this means "start 150ms later", then offset = 0.15
+        const offset = 0.15; 
+
+        // Grouping logic
+        const groups: { text: string, isHook: boolean, wordCount: number }[] = [];
+        let currentGroup: string[] = [];
+        let isCurrentGroupHook: boolean = false;
+
+        const isHookWord = (index: number) => index < hookWords.length;
+
+        for (let i = 0; i < allWords.length; i++) {
+            const word = allWords[i];
+            const isHook = isHookWord(i);
+
+            if (currentGroup.length === 0) {
+                currentGroup.push(word);
+                isCurrentGroupHook = isHook;
+            } else {
+                // Check if we should split
+                const currentIsHook: boolean = isCurrentGroupHook;
+
+                // 1. Transition Hook <-> Body -> ALWAYS SPLIT
+                if (currentIsHook !== isHook) {
+                    groups.push({
+                        text: currentGroup.join(' '),
+                        isHook: currentIsHook,
+                        wordCount: currentGroup.length
+                    });
+                    currentGroup = [word];
+                    isCurrentGroupHook = isHook;
+                }
+                // 2. Hook Mode: Keep full hook together? Or split?
+                // User said: "HOOK u CAPS" and "Primer: THIS FOOD NEVER GOES BAD"
+                // The example shows the whole hook on one line (5 words).
+                // So if it's hook, we try to keep it together unless it's too long.
+                else if (isHook) {
+                    // If hook is very long (> 7 words), maybe split. 
+                    // But user example has 5 words on one line.
+                    // Let's stick to max 6 words for hook to be safe for mobile width.
+                    if (currentGroup.length >= 6) {
+                         groups.push({
+                            text: currentGroup.join(' '),
+                            isHook: true,
+                            wordCount: currentGroup.length
+                        });
+                        currentGroup = [word];
+                    } else {
+                        currentGroup.push(word);
+                    }
+                }
+                // 3. Body Mode: 2-4 words per line (Target 3)
+                else {
+                    if (currentGroup.length >= targetWordsPerSegment) {
+                        groups.push({
+                            text: currentGroup.join(' '),
+                            isHook: false,
+                            wordCount: currentGroup.length
+                        });
+                        currentGroup = [word];
+                    } else {
+                        currentGroup.push(word);
+                    }
+                }
             }
         }
+        
+        // Push last group
+        if (currentGroup.length > 0) {
+            groups.push({
+                text: currentGroup.join(' '),
+                isHook: isCurrentGroupHook,
+                wordCount: currentGroup.length
+            });
+        }
+
+        // Timing Distribution (Proportional to word count)
+        const totalWords = allWords.length;
+        
+        groups.forEach(group => {
+            // Calculate duration proportional to word count
+            const groupDuration = (group.wordCount / totalWords) * totalDuration;
+            
+            // Apply Uppercase for Hook
+            const finalText = group.isHook ? group.text.toUpperCase() : group.text;
+            
+            // Style override for Hook? 
+            // VideoComposer usually handles style in filter_complex via ForceStyle or ASS.
+            // Since we are using SRT with ForceStyle globally, we can't easily change style per line without ASS.
+            // BUT, user asked for "HOOK u CAPS". That is handled here.
+            // If we want different color/font for Hook, we need ASS or multiple SRT tracks.
+            // For now, CAPS is what I can do easily in text.
+            // To make it distinct, maybe add color tag if SRT supports it (some players do, ffmpeg burn-in might).
+            // FFmpeg subtitles filter supports basic HTML-like tags: <font color="yellow">...</font>
+            // Let's try that for Hook!
+            
+            const styledText = group.isHook 
+                ? `<font color="yellow"><b>${finalText}</b></font>` // Yellow + Bold for Hook
+                : finalText;
+
+            if (groupDuration > 0) {
+                segments.push({
+                    text: styledText,
+                    startTime: Math.max(0, currentTime + offset),
+                    duration: groupDuration
+                });
+                currentTime += groupDuration;
+            }
+        });
         
         return segments;
     }
