@@ -391,10 +391,10 @@ export class VideoAgent extends BaseAgent {
             }
 
             // Create subtitles from script
-            this.log(`📝 Generating subtitles with Hook: "${hookText.substring(0, 20)}..."`);
+            this.log(`📝 Generating Kinetic Subtitles with Hook: "${hookText.substring(0, 20)}..."`);
             
-            const subtitles = VideoComposer.createSubtitlesFromText(script, audioDuration, hookText);
-            this.log(`📝 Generated ${subtitles.length} subtitle segments`);
+            const subtitles = VideoComposer.createKineticSubtitles(script, audioDuration, hookText);
+            this.log(`📝 Generated ${subtitles.length} kinetic subtitle segments`);
             
             // Save subtitles to debug
             const srtPath = path.join(debugDir, 'subtitles.srt');
@@ -472,7 +472,7 @@ export class VideoAgent extends BaseAgent {
         }));
 
         // Create subtitles from script
-        const subtitles = VideoComposer.createSubtitlesFromText(script, audioDuration);
+        const subtitles = VideoComposer.createKineticSubtitles(script, audioDuration);
 
         // Use VideoComposer to render
         await this.videoComposer.compose({
@@ -491,7 +491,7 @@ export class VideoAgent extends BaseAgent {
         const audioDuration = await this.getAudioDuration(audioPath);
         
         // Create subtitles from script
-        const subtitles = VideoComposer.createSubtitlesFromText(scriptText, audioDuration);
+        const subtitles = VideoComposer.createKineticSubtitles(scriptText, audioDuration);
 
         // Use VideoComposer to render with background video
         await this.videoComposer.compose({

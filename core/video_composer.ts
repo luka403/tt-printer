@@ -14,6 +14,7 @@ export interface SubtitleSegment {
     startTime: number; // Start time in seconds
     duration: number; // Duration in seconds
     style?: SubtitleStyle;
+    styleName?: string; // For ASS styles
 }
 
 export interface SubtitleStyle {
@@ -150,10 +151,10 @@ export class VideoComposer {
             let subtitlesFilterPath = '';
             
             if (subtitles.length > 0) {
-                // Generate SRT file
-                const srtPath = outputPath.replace('.mp4', '.srt');
-                this.generateSRT(subtitles, srtPath);
-                subtitlesFilterPath = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+                // Generate ASS file
+                const assPath = outputPath.replace('.mp4', '.ass');
+                this.generateAdvancedASS(subtitles, assPath);
+                subtitlesFilterPath = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
             }
 
             videoSegments.forEach((segment, index) => {
@@ -205,8 +206,8 @@ export class VideoComposer {
             if (segmentOutputs.length > 0) {
                 if (subtitlesFilterPath) {
                     filterParts.push(`${segmentOutputs.join('')}concat=n=${segmentOutputs.length}:v=1:a=0[pre_sub]`);
-                    // Apply subtitles to the concatenated video with improved style
-                    filterParts.push(`[pre_sub]subtitles=${subtitlesFilterPath}:force_style='Fontname=Arial,Fontsize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=10,MarginL=40,MarginR=40,MarginV=50'[outv]`);
+                    // Apply subtitles to the concatenated video
+                    filterParts.push(`[pre_sub]subtitles=${subtitlesFilterPath}[outv]`);
                 } else {
                     filterParts.push(`${segmentOutputs.join('')}concat=n=${segmentOutputs.length}:v=1:a=0[outv]`);
                 }
@@ -319,19 +320,19 @@ export class VideoComposer {
             // Scale background video
             filterParts.push(`[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}[bg]`);
 
-            // Add subtitles using SRT file
+            // Add subtitles using ASS file
             let videoOutput = '[bg]';
-            let srtPath: string | null = null;
+            let assPath: string | null = null;
             
             if (subtitles.length > 0) {
-                // Generate SRT file
-                srtPath = outputPath.replace('.mp4', '.srt');
-                this.generateSRT(subtitles, srtPath);
+                // Generate ASS file
+                assPath = outputPath.replace('.mp4', '.ass');
+                this.generateAdvancedASS(subtitles, assPath);
                 
                 // Use subtitles filter (requires libass)
-                const escapedSrtPath = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+                const escapedAssPath = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
                 
-                filterParts.push(`${videoOutput}subtitles=${escapedSrtPath}:force_style='Fontname=Arial,Fontsize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=10,MarginL=40,MarginR=40,MarginV=50'[outv]`);
+                filterParts.push(`${videoOutput}subtitles=${escapedAssPath}[outv]`);
                 videoOutput = '[outv]';
             } else {
                 filterParts.push(`${videoOutput}copy[outv]`);
@@ -388,7 +389,7 @@ export class VideoComposer {
                     resolve(outputPath);
                 } else {
                     console.error('\n[VideoComposer] Error:', errorOutput.substring(errorOutput.length - 1000));
-                    reject(new Error(`FFmpeg exited with code ${code}. Check SRT file at: ${srtPath || 'N/A'}`));
+                    reject(new Error(`FFmpeg exited with code ${code}. Check ASS file at: ${assPath || 'N/A'}`));
                 }
             });
 
@@ -398,20 +399,67 @@ export class VideoComposer {
         });
     }
 
-    private generateSRT(subtitles: SubtitleSegment[], outputPath: string) {
-        let srtContent = '';
-        subtitles.forEach((sub, index) => {
-            const startTime = this.formatTime(sub.startTime);
-            const endTime = this.formatTime(sub.startTime + sub.duration);
-            srtContent += `${index + 1}\n${startTime} --> ${endTime}\n${sub.text}\n\n`;
+    /**
+     * Generate Advanced ASS file for Kinetic Typography
+     */
+    private generateAdvancedASS(subtitles: SubtitleSegment[], outputPath: string) {
+        // ASS Header with animations
+        let assContent = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 1
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,75,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,0,5,10,10,10,1
+Style: HookStyle,Arial,90,&H0000FFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,6,0,5,10,10,10,1
+Style: Keyword,Arial,75,&H0000FFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,0,5,10,10,10,1
+Style: Number,Arial,75,&H000000FF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,0,5,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+        subtitles.forEach(sub => {
+            const startTime = this.formatTimeASS(sub.startTime);
+            const endTime = this.formatTimeASS(sub.startTime + sub.duration);
+            let style = 'Default';
+            let text = sub.text;
+            
+            // Apply Pop Animation
+            // \\t(0,100,...) interpolates from start time + 0ms to start time + 100ms
+            // Start big (120%) then shrink to 100%
+            const popAnim = `{\\fscx120\\fscy120\\t(0,150,\\fscx100\\fscy100)}`;
+            
+            // Determine Style based on segment metadata
+            if (sub.styleName === 'HookStyle') {
+                style = 'HookStyle';
+                // Hook is usually static or slower pop
+                text = `${popAnim}${text}`; 
+            } else {
+                // Body word
+                // Apply logic for keywords if not already applied in createKineticSubtitles
+                // But createKineticSubtitles sets styleName
+                if (sub.styleName === 'Keyword') style = 'Keyword';
+                if (sub.styleName === 'Number') style = 'Number';
+                
+                text = `${popAnim}${text}`;
+            }
+            
+            assContent += `Dialogue: 0,${startTime},${endTime},${style},,0,0,0,,${text}\n`;
         });
-        fs.writeFileSync(outputPath, srtContent);
+
+        fs.writeFileSync(outputPath, assContent);
     }
 
-    private formatTime(seconds: number): string {
-        const date = new Date(0);
-        date.setMilliseconds(seconds * 1000);
-        return date.toISOString().substr(11, 12).replace('.', ',');
+    private formatTimeASS(seconds: number): string {
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
+        const cs = Math.floor((seconds % 1) * 100); // Centiseconds
+        return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${cs.toString().padStart(2, '0')}`;
     }
 
     /**
@@ -447,152 +495,130 @@ export class VideoComposer {
     }
 
     /**
-     * Split text into subtitle segments based on timing
-     * Helper method to automatically create subtitles from text and audio duration
+     * Create Kinetic Typography Subtitles
+     * 1 word per subtitle (except Hook)
+     * Precise timing
+     * Keyword highlighting
      */
-    static createSubtitlesFromText(
+    static createKineticSubtitles(
         text: string,
         totalDuration: number,
         hookText: string = ''
     ): SubtitleSegment[] {
-        // Clean and split words
+        // 1. Pre-process text
         const cleanText = (t: string) => t.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
-        const allWords = cleanText(text).split(' ');
+        const fullText = cleanText(text);
         
-        // Identify hook words
-        let hookWords: string[] = [];
+        // 2. Identify Hook
+        let hookEndIndex = 0;
+        let hookDuration = 0;
+        let hasHook = false;
+        
         if (hookText) {
             const cleanHook = cleanText(hookText);
-            const hookWordsTemp = cleanHook.split(' ');
+            // Check if fullText starts with cleanHook
+            // Remove punctuation for check
+            const normFull = fullText.toLowerCase().replace(/[^\w\s]/g, '');
+            const normHook = cleanHook.toLowerCase().replace(/[^\w\s]/g, '');
             
-            // Try to match hook at the beginning
-            let matchCount = 0;
-            for(let i=0; i<hookWordsTemp.length; i++) {
-                if (allWords[i] && allWords[i].toLowerCase().includes(hookWordsTemp[i].toLowerCase().replace(/[^\w]/g,''))) {
-                    matchCount++;
-                }
-            }
-            if (matchCount > hookWordsTemp.length * 0.5) {
-                hookWords = allWords.slice(0, hookWordsTemp.length);
+            if (normFull.startsWith(normHook)) {
+                hasHook = true;
+                // Find where hook ends in original text
+                // Rough estimate based on words
+                const hookWordsCount = cleanHook.split(' ').length;
+                const allWords = fullText.split(' ');
+                // Reconstruct hook from fullText to get exact punctuation
+                const matchedHook = allWords.slice(0, hookWordsCount).join(' ');
+                hookEndIndex = matchedHook.length;
+                
+                // Hook Duration Strategy: 
+                // User said: 1.8–2.2s. Let's aim for 2.0s
+                // BUT proportional to length is safer if hook is very long or short
+                // Let's use proportional but capped/floored
+                const totalChars = fullText.length;
+                const hookChars = matchedHook.length;
+                const proportionalHookTime = (hookChars / totalChars) * totalDuration;
+                
+                // Boost hook time slightly because it's dense? Or cap it?
+                // User said "Hook... 1.8-2.2s". 
+                // If total duration is 60s, proportional might be 5s. That's too long for a static slide.
+                // We should force it to ~2s.
+                hookDuration = Math.min(2.5, Math.max(1.5, proportionalHookTime));
             }
         }
 
         const segments: SubtitleSegment[] = [];
         let currentTime = 0;
-        
-        // Settings requested by user
-        // WORDS_PER_SUBTITLE = 3 (Range 2-4)
-        const targetWordsPerSegment = 3; 
-        // SUBTITLE_DELAY_MS = 150 (+150ms delay)
-        // If this means "start 150ms later", then offset = 0.15
-        const offset = 0.15; 
+        const overlap = 0.1; // 100ms overlap
+        // Start time offset (User said start_time = word_start_time - 0.05s)
+        const leadIn = -0.05;
 
-        // Grouping logic
-        const groups: { text: string, isHook: boolean, wordCount: number }[] = [];
-        let currentGroup: string[] = [];
-        let isCurrentGroupHook: boolean = false;
-
-        const isHookWord = (index: number) => index < hookWords.length;
-
-        for (let i = 0; i < allWords.length; i++) {
-            const word = allWords[i];
-            const isHook = isHookWord(i);
-
-            if (currentGroup.length === 0) {
-                currentGroup.push(word);
-                isCurrentGroupHook = isHook;
-            } else {
-                // Check if we should split
-                const currentIsHook: boolean = isCurrentGroupHook;
-
-                // 1. Transition Hook <-> Body -> ALWAYS SPLIT
-                if (currentIsHook !== isHook) {
-                    groups.push({
-                        text: currentGroup.join(' '),
-                        isHook: currentIsHook,
-                        wordCount: currentGroup.length
-                    });
-                    currentGroup = [word];
-                    isCurrentGroupHook = isHook;
-                }
-                // 2. Hook Mode: Keep full hook together? Or split?
-                // User said: "HOOK u CAPS" and "Primer: THIS FOOD NEVER GOES BAD"
-                // The example shows the whole hook on one line (5 words).
-                // So if it's hook, we try to keep it together unless it's too long.
-                else if (isHook) {
-                    // If hook is very long (> 7 words), maybe split. 
-                    // But user example has 5 words on one line.
-                    // Let's stick to max 6 words for hook to be safe for mobile width.
-                    if (currentGroup.length >= 6) {
-                         groups.push({
-                            text: currentGroup.join(' '),
-                            isHook: true,
-                            wordCount: currentGroup.length
-                        });
-                        currentGroup = [word];
-                    } else {
-                        currentGroup.push(word);
-                    }
-                }
-                // 3. Body Mode: 2-4 words per line (Target 3)
-                else {
-                    if (currentGroup.length >= targetWordsPerSegment) {
-                        groups.push({
-                            text: currentGroup.join(' '),
-                            isHook: false,
-                            wordCount: currentGroup.length
-                        });
-                        currentGroup = [word];
-                    } else {
-                        currentGroup.push(word);
-                    }
-                }
-            }
-        }
-        
-        // Push last group
-        if (currentGroup.length > 0) {
-            groups.push({
-                text: currentGroup.join(' '),
-                isHook: isCurrentGroupHook,
-                wordCount: currentGroup.length
+        // 3. Handle Hook
+        if (hasHook) {
+            const hookContent = fullText.substring(0, hookEndIndex);
+            
+            segments.push({
+                text: hookContent.toUpperCase(), // HOOK ALWAYS CAPS
+                startTime: 0,
+                duration: hookDuration + overlap,
+                styleName: 'HookStyle'
             });
+            
+            currentTime += hookDuration;
         }
 
-        // Timing Distribution (Proportional to word count)
-        const totalWords = allWords.length;
-        
-        groups.forEach(group => {
-            // Calculate duration proportional to word count
-            const groupDuration = (group.wordCount / totalWords) * totalDuration;
-            
-            // Apply Uppercase for Hook
-            const finalText = group.isHook ? group.text.toUpperCase() : group.text;
-            
-            // Style override for Hook? 
-            // VideoComposer usually handles style in filter_complex via ForceStyle or ASS.
-            // Since we are using SRT with ForceStyle globally, we can't easily change style per line without ASS.
-            // BUT, user asked for "HOOK u CAPS". That is handled here.
-            // If we want different color/font for Hook, we need ASS or multiple SRT tracks.
-            // For now, CAPS is what I can do easily in text.
-            // To make it distinct, maybe add color tag if SRT supports it (some players do, ffmpeg burn-in might).
-            // FFmpeg subtitles filter supports basic HTML-like tags: <font color="yellow">...</font>
-            // Let's try that for Hook!
-            
-            const styledText = group.isHook 
-                ? `<font color="yellow"><b>${finalText}</b></font>` // Yellow + Bold for Hook
-                : finalText;
+        // 4. Handle Body (Word-by-Word)
+        const bodyText = hasHook ? fullText.substring(hookEndIndex).trim() : fullText;
+        if (!bodyText) return segments;
 
-            if (groupDuration > 0) {
-                segments.push({
-                    text: styledText,
-                    startTime: Math.max(0, currentTime + offset),
-                    duration: groupDuration
-                });
-                currentTime += groupDuration;
-            }
-        });
+        const words = bodyText.split(' ');
+        const bodyDuration = totalDuration - currentTime;
         
+        // Calculate total characters in body for proportional timing
+        const totalBodyChars = words.reduce((acc, w) => acc + w.length, 0);
+        
+        // Keywords logic (Simple Heuristics)
+        // Nouns, Verbs, Emotional words, Numbers
+        // We'll use a basic list + regex
+        const commonVerbs = ['is', 'are', 'was', 'were', 'have', 'has', 'had', 'do', 'does', 'did', 'can', 'could', 'will', 'would', 'should'];
+        const stopWords = ['the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'and', 'but', 'or', 'so', 'it', 'this', 'that', 'these', 'those', 'he', 'she', 'they', 'we', 'i', 'you', 'my', 'your', 'his', 'her', 'their', 'our'];
+        
+        words.forEach(word => {
+            const cleanWord = word.replace(/[^\w]/g, '');
+            const wordLen = cleanWord.length;
+            
+            // Calculate duration based on character length relative to total body length
+            // Ensure min duration of 0.2s for readability
+            let wordDuration = (wordLen / totalBodyChars) * bodyDuration;
+            // Adjust: distribute remaining time if min duration is enforced?
+            // Simple proportional is safest to ensure they sum up to bodyDuration
+            
+            // Determine Style
+            let styleName = 'Default';
+            
+            // Check for Number
+            if (/\d/.test(word)) {
+                styleName = 'Number'; // Red
+            }
+            // Check for Keywords (Long words, not stop words, or specific emotional words)
+            else if (wordLen > 5 && !stopWords.includes(cleanWord.toLowerCase())) {
+                styleName = 'Keyword'; // Yellow/Green
+            }
+            // Check specific emotional/impact words
+            else if (['shocking', 'secret', 'never', 'always', 'stop', 'die', 'live', 'love', 'hate', 'brain', 'money'].includes(cleanWord.toLowerCase())) {
+                styleName = 'Keyword';
+            }
+
+            segments.push({
+                text: word,
+                startTime: Math.max(0, currentTime + leadIn), // Apply lead-in
+                duration: wordDuration + overlap,
+                styleName: styleName
+            });
+            
+            currentTime += wordDuration;
+        });
+
         return segments;
     }
 }
