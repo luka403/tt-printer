@@ -30,7 +30,7 @@ export class VideoAgent extends BaseAgent {
     }
 
     async processTask(task: AgentTask): Promise<any> {
-        const { videoId, script, niche } = task.payload;
+        const { videoId, script, niche, noSubtitles } = task.payload;
         this.log(`Starting video production for Video ${videoId} (Niche: ${niche})`);
 
         const outputDir = path.resolve(__dirname, `../../videos/processed`);
@@ -86,7 +86,7 @@ export class VideoAgent extends BaseAgent {
         if (useDriveVideos) {
             this.log('🎬 Using Drive videos - skipping image generation...');
             try {
-                await this.renderWithDriveVideos(videoId, tempAudioPath, finalVideoPath, script, audioDuration, niche, debugDir, task.payload.hook || '');
+                await this.renderWithDriveVideos(videoId, tempAudioPath, finalVideoPath, script, audioDuration, niche, debugDir, task.payload.hook || '', noSubtitles);
                 
                 // Verify video was created
                 if (!fs.existsSync(finalVideoPath)) {
@@ -252,6 +252,146 @@ export class VideoAgent extends BaseAgent {
         });
     }
 
+    private async transcribeWithWhisper(audioPath: string, jsonPath: string): Promise<boolean> {
+        return new Promise((resolve) => {
+            // Define User Paths
+            const homeDir = process.env.HOME || '/root';
+            const saputacDir = path.join(homeDir, 'saputac');
+            const scriptName = 'transcribe.py'; // Or 'transcribe' if executable
+            let scriptPath = path.join(saputacDir, scriptName);
+            
+            // Check variations
+            if (!fs.existsSync(scriptPath)) {
+                if (fs.existsSync(path.join(saputacDir, 'transcribe'))) {
+                    scriptPath = path.join(saputacDir, 'transcribe'); // Executable/No extension
+                } else if (fs.existsSync(path.join(saputacDir, 'trancribe.py'))) {
+                    scriptPath = path.join(saputacDir, 'trancribe.py'); // Typo
+                } else {
+                    // Final fallback: local project script
+                    scriptPath = path.resolve(__dirname, '../../core/python/transcribe_timestamp.py');
+                    this.log('⚠️ User script not found in ~/saputac. Falling back to local core script.');
+                }
+            }
+
+            this.log(`🎤 Running Transcription Script: ${scriptPath}`);
+            
+            // Logic for saputac script: It saves to ~/saputac/{output_filename}
+            // We need to pass just the filename for output
+            const outputFileName = `words_${Date.now()}.json`;
+            const expectedOutputPath = path.join(saputacDir, outputFileName);
+            
+            // Call arguments
+            // If it's the core script, it expects full path.
+            // If it's the user script (saputac), it might behave differently.
+            // USER SAID: "on cuva output u ~/saputac/{output} tako da u imenu mu dajes tipa words.json"
+            
+            let args: string[] = [];
+            let isUserScript = scriptPath.includes('saputac');
+
+            if (isUserScript) {
+                // User Script: python ~/saputac/transcribe.py <audio_path> <output_filename>
+                args = [scriptPath, audioPath, outputFileName];
+            } else {
+                // Internal Script: python script.py <audio_path> <full_output_path>
+                args = [scriptPath, audioPath, jsonPath];
+            }
+
+            const pythonCmd = 'python3'; 
+            this.log(`   Command: ${pythonCmd} ${args.join(' ')}`);
+
+            const pythonProcess = spawn(pythonCmd, args);
+
+            pythonProcess.stdout.on('data', (data) => {
+                const msg = data.toString().trim();
+                if (msg) this.log(`[Whisper] ${msg}`);
+            });
+            
+            pythonProcess.stderr.on('data', (data) => {
+                // this.log(`[Whisper Stderr] ${data.toString()}`);
+            });
+
+            pythonProcess.on('close', (code) => {
+                // Handle success
+                if (code === 0) {
+                    if (isUserScript) {
+                        // Move file from ~/saputac/words.json to our jsonPath
+                        if (fs.existsSync(expectedOutputPath)) {
+                            this.log(`✅ Found output at ${expectedOutputPath}, moving to destination...`);
+                            fs.renameSync(expectedOutputPath, jsonPath);
+                            resolve(true);
+                        } else {
+                            this.log(`❌ Script finished but output file missing at: ${expectedOutputPath}`);
+                            resolve(false);
+                        }
+                    } else {
+                        // Internal script writes directly to jsonPath
+                        if (fs.existsSync(jsonPath)) {
+                            this.log('✅ Transcription JSON generated successfully');
+                            resolve(true);
+                        } else {
+                            this.log('❌ Transcription failed (No output).');
+                            resolve(false);
+                        }
+                    }
+                } else {
+                    this.log('❌ Transcription failed. Code: ' + code);
+                    resolve(false);
+                }
+            });
+            
+            pythonProcess.on('error', (err) => {
+                this.log('❌ Failed to spawn python process: ' + err.message);
+                resolve(false);
+            });
+        });
+    }
+
+    private async generateKaraokePython(audioPath: string, outputAssPath: string): Promise<boolean> {
+        return new Promise((resolve) => {
+            // Check if python script exists
+            const scriptPath = path.resolve(__dirname, '../../core/python/generate_karaoke.py');
+            if (!fs.existsSync(scriptPath)) {
+                this.log('❌ Python script not found: ' + scriptPath);
+                resolve(false);
+                return;
+            }
+
+            this.log('🎤 Running WhisperX for Viral Karaoke...');
+            // Try python3 first, then python
+            const pythonCmd = 'python3'; 
+            const pythonProcess = spawn(pythonCmd, [scriptPath, audioPath, outputAssPath]);
+
+            let output = '';
+            pythonProcess.stdout.on('data', (data) => {
+                output += data.toString();
+                // Only show relevant output lines to keep logs clean
+                if (data.toString().includes('Processing') || data.toString().includes('Generated')) {
+                    this.log(`[Python] ${data.toString().trim()}`);
+                }
+            });
+            
+            pythonProcess.stderr.on('data', (data) => {
+                // WhisperX prints a lot of info to stderr
+                // this.log(`[Python Error] ${data.toString()}`);
+            });
+
+            pythonProcess.on('close', (code) => {
+                if (code === 0 && fs.existsSync(outputAssPath)) {
+                    this.log('✅ Karaoke ASS generated successfully via Python');
+                    resolve(true);
+                } else {
+                    this.log('❌ Karaoke generation failed (fallback to estimator). Code: ' + code);
+                    resolve(false);
+                }
+            });
+            
+            pythonProcess.on('error', (err) => {
+                this.log('❌ Failed to spawn python process: ' + err.message);
+                resolve(false);
+            });
+        });
+    }
+
     private async getAudioDuration(audioPath: string): Promise<number> {
         return new Promise((resolve, reject) => {
             const ffprobe = spawn('ffprobe', [
@@ -322,41 +462,66 @@ export class VideoAgent extends BaseAgent {
         audioDuration: number,
         niche: string,
         debugDir: string,
-        hookText: string = ''
+        hookText: string = '',
+        noSubtitles: boolean = false
     ): Promise<void> {
         try {
-            // Use local videos from assets/drive_videos
-            const driveVideosPath = path.resolve(__dirname, `../../assets/drive_videos`);
+            // Check ENV for specific drive path or target video file
+            const envDrivePath = process.env.DRIVE_VIDEOS_PATH;
+            const envTargetVideo = process.env.TARGET_VIDEO_FILE;
+            
+            // Use env path if available, otherwise default
+            const driveVideosPath = envDrivePath 
+                ? path.resolve(envDrivePath)
+                : path.resolve(__dirname, `../../assets/drive_videos`);
             
             if (!fs.existsSync(driveVideosPath)) {
-                const errorMsg = 'Drive videos directory does not exist';
+                // If using default, error. If using custom env, maybe we need to create it?
+                // Let's assume user configured it correctly.
+                const errorMsg = `Drive videos directory does not exist: ${driveVideosPath}`;
                 this.log(`❌ ${errorMsg}`);
                 fs.writeFileSync(path.join(debugDir, 'error_drive_videos.txt'), errorMsg);
                 throw new Error(errorMsg);
             }
 
-            // List all available video files
-            const localVideoFiles = fs.readdirSync(driveVideosPath)
-                .filter(f => /\.(mp4|mov|avi|mkv)$/i.test(f))
-                .map(f => path.join(driveVideosPath, f))
-                .filter(f => fs.existsSync(f));
+            let backgroundVideo = '';
 
-            if (localVideoFiles.length === 0) {
-                const errorMsg = 'No video files found in drive_videos';
-                this.log(`❌ ${errorMsg}`);
-                fs.writeFileSync(path.join(debugDir, 'error_drive_videos.txt'), errorMsg);
-                throw new Error(errorMsg);
+            // If a specific target file is set in ENV, use it
+            if (envTargetVideo) {
+                const targetPath = path.join(driveVideosPath, envTargetVideo);
+                if (fs.existsSync(targetPath)) {
+                    backgroundVideo = targetPath;
+                    this.log(`🎥 Using specific ENV target video: ${envTargetVideo}`);
+                } else {
+                    this.log(`⚠️ ENV target video not found: ${envTargetVideo}. Falling back to random selection.`);
+                }
             }
 
-            this.log(`✅ Found ${localVideoFiles.length} video file(s) in drive_videos`);
-            
-            // Save video list to debug
-            fs.writeFileSync(path.join(debugDir, 'drive_videos_list.txt'), 
-                localVideoFiles.map(f => `${f}\n`).join(''));
+            // If no background video selected yet, pick random
+            if (!backgroundVideo) {
+                // List all available video files
+                const localVideoFiles = fs.readdirSync(driveVideosPath)
+                    .filter(f => /\.(mp4|mov|avi|mkv)$/i.test(f))
+                    .map(f => path.join(driveVideosPath, f))
+                    .filter(f => fs.existsSync(f));
 
-            // Pick ONE video at random
-            const backgroundVideo = localVideoFiles[Math.floor(Math.random() * localVideoFiles.length)];
-            this.log(`🎥 Selected background video: ${path.basename(backgroundVideo)}`);
+                if (localVideoFiles.length === 0) {
+                    const errorMsg = `No video files found in ${driveVideosPath}`;
+                    this.log(`❌ ${errorMsg}`);
+                    fs.writeFileSync(path.join(debugDir, 'error_drive_videos.txt'), errorMsg);
+                    throw new Error(errorMsg);
+                }
+
+                this.log(`✅ Found ${localVideoFiles.length} video file(s) in ${driveVideosPath}`);
+                
+                // Save video list to debug
+                fs.writeFileSync(path.join(debugDir, 'drive_videos_list.txt'), 
+                    localVideoFiles.map(f => `${f}\n`).join(''));
+
+                // Pick ONE video at random
+                backgroundVideo = localVideoFiles[Math.floor(Math.random() * localVideoFiles.length)];
+                this.log(`🎥 Selected random background video: ${path.basename(backgroundVideo)}`);
+            }
             
             // Verify background video exists and get info
             if (!fs.existsSync(backgroundVideo)) {
@@ -390,21 +555,51 @@ export class VideoAgent extends BaseAgent {
                 this.log(`   Condition: Video <= Audio. Looping background video.`);
             }
 
-            // Create subtitles from script
-            this.log(`📝 Generating Kinetic Subtitles with Hook: "${hookText.substring(0, 20)}..."`);
+            // Create subtitles
+            let subtitles: SubtitleSegment[] = [];
+            let assFilePath: string | undefined = undefined;
+
+            if (!noSubtitles) {
+                // Strategy: Try Faster-Whisper -> JSON -> Typewriter ASS
+                const whisperJsonPath = path.join(debugDir, 'transcription.json');
+                const assPath = path.join(debugDir, 'subtitles.ass');
+                
+                this.log(`📝 Attempting Faster-Whisper Alignment...`);
+                const whisperSuccess = await this.transcribeWithWhisper(audioPath, whisperJsonPath);
+                
+                if (whisperSuccess) {
+                    this.log(`✅ Whisper succeeded! Generating Typewriter ASS...`);
+                    // Load JSON
+                    const whisperData = JSON.parse(fs.readFileSync(whisperJsonPath, 'utf-8'));
+                    
+                    // Generate ASS with Typewriter effect via VideoComposer static method (we will add this)
+                    VideoComposer.generateTypewriterASS(whisperData, assPath, hookText);
+                    
+                    assFilePath = assPath;
+                } 
+                // Fallback to internal estimator if Whisper fails
+                else {
+                    this.log(`⚠️ Whisper unavailable/failed. Falling back to internal estimator.`);
+                    
+                    this.log(`📝 Generating Kinetic Subtitles with Hook: "${hookText.substring(0, 20)}..."`);
+                    subtitles = VideoComposer.createKineticSubtitles(script, audioDuration, hookText);
+                    this.log(`📝 Generated ${subtitles.length} kinetic subtitle segments`);
+                    
+                    // Save subtitles to debug
+                    const srtPath = path.join(debugDir, 'subtitles.srt');
+                    this.generateSRT(subtitles, srtPath);
+                    this.log(`   Saved SRT to: ${srtPath}`);
+                }
+            } else {
+                this.log('🚫 Subtitles disabled by configuration');
+            }
             
-            const subtitles = VideoComposer.createKineticSubtitles(script, audioDuration, hookText);
-            this.log(`📝 Generated ${subtitles.length} kinetic subtitle segments`);
-            
-            // Save subtitles to debug
-            const srtPath = path.join(debugDir, 'subtitles.srt');
-            this.generateSRT(subtitles, srtPath);
-            this.log(`   Saved SRT to: ${srtPath}`);
-            
-            // Save subtitle info
-            fs.writeFileSync(path.join(debugDir, 'subtitles_info.txt'), 
-                `Total segments: ${subtitles.length}\nTotal duration: ${audioDuration.toFixed(2)}s\n` +
-                subtitles.map((s, i) => `${i + 1}. ${s.startTime.toFixed(2)}s - ${(s.startTime + s.duration).toFixed(2)}s: ${s.text.substring(0, 50)}...`).join('\n'));
+            if (subtitles.length > 0) {
+                 // Save subtitle info for fallback
+                 fs.writeFileSync(path.join(debugDir, 'subtitles_info.txt'), 
+                    `Total segments: ${subtitles.length}\nTotal duration: ${audioDuration.toFixed(2)}s\n` +
+                    subtitles.map((s, i) => `${i + 1}. ${s.startTime.toFixed(2)}s - ${(s.startTime + s.duration).toFixed(2)}s: ${s.text.substring(0, 50)}...`).join('\n'));
+            }
 
             // Compose video with background video + audio + subtitles
             this.log(`🎬 Composing video...`);
@@ -422,7 +617,8 @@ export class VideoAgent extends BaseAgent {
                 height: 1920,
                 fps: 30,
                 backgroundStartTime: startTime,
-                loopBackground: loopBackground
+                loopBackground: loopBackground,
+                assFilePath // Pass pre-generated ASS if available
             });
 
             // Verify output exists

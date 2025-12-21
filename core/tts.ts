@@ -16,7 +16,7 @@ export class RemoteKokoroTTS implements TTSService {
     private httpsAgent: https.Agent;
 
     constructor() {
-        this.apiBase = 'http://54.84.200.147:8880';
+        this.apiBase = process.env.TTS_API_URL || 'http://54.84.200.147:8880';
         this.httpsAgent = new https.Agent({ rejectUnauthorized: false });
     }
 

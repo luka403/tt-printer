@@ -41,6 +41,7 @@ export interface VideoCompositionOptions {
     audioCodec?: string;
     backgroundStartTime?: number; // Start time for background video
     loopBackground?: boolean; // Whether to loop background video
+    assFilePath?: string; // Pre-generated ASS file path
 }
 
 export class VideoComposer {
@@ -61,7 +62,8 @@ export class VideoComposer {
             videoCodec = 'libx264',
             audioCodec = 'aac',
             backgroundStartTime = 0,
-            loopBackground = false
+            loopBackground = false,
+            assFilePath
         } = options;
 
         // Ensure output directory exists
@@ -89,7 +91,8 @@ export class VideoComposer {
                 fps,
                 audioVolume,
                 videoCodec,
-                audioCodec
+                audioCodec,
+                assFilePath
             });
         }
 
@@ -108,7 +111,8 @@ export class VideoComposer {
                 videoCodec,
                 audioCodec,
                 startTime: backgroundStartTime,
-                loop: loopBackground
+                loop: loopBackground,
+                assFilePath
             });
         }
 
@@ -130,8 +134,9 @@ export class VideoComposer {
         audioVolume: number;
         videoCodec: string;
         audioCodec: string;
+        assFilePath?: string;
     }): Promise<string> {
-        const { outputPath, videoSegments, audioPath, audioDuration, subtitles, width, height, fps, audioVolume, videoCodec, audioCodec } = options;
+        const { outputPath, videoSegments, audioPath, audioDuration, subtitles, width, height, fps, audioVolume, videoCodec, audioCodec, assFilePath } = options;
 
         return new Promise((resolve, reject) => {
             const args: string[] = [];
@@ -150,7 +155,9 @@ export class VideoComposer {
             const segmentOutputs: string[] = [];
             let subtitlesFilterPath = '';
             
-            if (subtitles.length > 0) {
+            if (assFilePath && fs.existsSync(assFilePath)) {
+                 subtitlesFilterPath = assFilePath.replace(/\\/g, '/').replace(/:/g, '\\:');
+            } else if (subtitles.length > 0) {
                 // Generate ASS file
                 const assPath = outputPath.replace('.mp4', '.ass');
                 this.generateAdvancedASS(subtitles, assPath);
@@ -294,8 +301,9 @@ export class VideoComposer {
         audioCodec: string;
         startTime?: number;
         loop?: boolean;
+        assFilePath?: string;
     }): Promise<string> {
-        const { outputPath, backgroundVideo, audioPath, audioDuration, subtitles, width, height, fps, audioVolume, videoCodec, audioCodec, startTime = 0, loop = false } = options;
+        const { outputPath, backgroundVideo, audioPath, audioDuration, subtitles, width, height, fps, audioVolume, videoCodec, audioCodec, startTime = 0, loop = false, assFilePath } = options;
 
         return new Promise((resolve, reject) => {
             const args: string[] = [];
@@ -322,15 +330,19 @@ export class VideoComposer {
 
             // Add subtitles using ASS file
             let videoOutput = '[bg]';
-            let assPath: string | null = null;
+            let finalAssPath: string | null = null;
             
-            if (subtitles.length > 0) {
+            if (assFilePath && fs.existsSync(assFilePath)) {
+                 finalAssPath = assFilePath;
+            } else if (subtitles.length > 0) {
                 // Generate ASS file
-                assPath = outputPath.replace('.mp4', '.ass');
-                this.generateAdvancedASS(subtitles, assPath);
-                
+                finalAssPath = outputPath.replace('.mp4', '.ass');
+                this.generateAdvancedASS(subtitles, finalAssPath);
+            }
+
+            if (finalAssPath) {
                 // Use subtitles filter (requires libass)
-                const escapedAssPath = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+                const escapedAssPath = finalAssPath.replace(/\\/g, '/').replace(/:/g, '\\:');
                 
                 filterParts.push(`${videoOutput}subtitles=${escapedAssPath}[outv]`);
                 videoOutput = '[outv]';
@@ -389,7 +401,7 @@ export class VideoComposer {
                     resolve(outputPath);
                 } else {
                     console.error('\n[VideoComposer] Error:', errorOutput.substring(errorOutput.length - 1000));
-                    reject(new Error(`FFmpeg exited with code ${code}. Check ASS file at: ${assPath || 'N/A'}`));
+                    reject(new Error(`FFmpeg exited with code ${code}. Check ASS file at: ${finalAssPath || 'N/A'}`));
                 }
             });
 
@@ -403,7 +415,7 @@ export class VideoComposer {
      * Generate Advanced ASS file for Kinetic Typography
      */
     private generateAdvancedASS(subtitles: SubtitleSegment[], outputPath: string) {
-        // ASS Header with animations
+        // ASS Header with animations - VIRAL WHITE STYLE
         let assContent = `[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -413,10 +425,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,75,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,0,5,10,10,10,1
-Style: HookStyle,Arial,90,&H0000FFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,6,0,5,10,10,10,1
-Style: Keyword,Arial,75,&H0000FFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,0,5,10,10,10,1
-Style: Number,Arial,75,&H000000FF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,0,5,10,10,10,1
+Style: Default,Arial,85,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,5,10,10,600,1
+Style: HookStyle,Arial,100,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,5,0,5,10,10,600,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -428,24 +438,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             let style = 'Default';
             let text = sub.text;
             
-            // Apply Pop Animation
-            // \\t(0,100,...) interpolates from start time + 0ms to start time + 100ms
-            // Start big (120%) then shrink to 100%
-            const popAnim = `{\\fscx120\\fscy120\\t(0,150,\\fscx100\\fscy100)}`;
+            // Viral Pop Animation (Fast & Snappy)
+            // Starts at 115% and snaps to 100% in 80ms
+            const popAnim = `{\\fscx115\\fscy115\\t(0,80,\\fscx100\\fscy100)}`;
             
-            // Determine Style based on segment metadata
             if (sub.styleName === 'HookStyle') {
                 style = 'HookStyle';
-                // Hook is usually static or slower pop
-                text = `${popAnim}${text}`; 
+                text = `${popAnim}${text.toUpperCase()}`; 
             } else {
-                // Body word
-                // Apply logic for keywords if not already applied in createKineticSubtitles
-                // But createKineticSubtitles sets styleName
-                if (sub.styleName === 'Keyword') style = 'Keyword';
-                if (sub.styleName === 'Number') style = 'Number';
-                
-                text = `${popAnim}${text}`;
+                // ALL CAPS FOR BODY TOO (Viral Standard)
+                text = `${popAnim}${text.toUpperCase()}`;
             }
             
             assContent += `Dialogue: 0,${startTime},${endTime},${style},,0,0,0,,${text}\n`;
@@ -494,6 +496,97 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         });
     }
 
+    static generateTypewriterASS(words: { word: string, start: number, end: number }[], outputPath: string, hookText: string = '') {
+        const leadIn = -0.10; // 100ms lead-in
+
+        let assContent = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 1
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,85,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,5,10,10,600,1
+Style: HookStyle,Arial,100,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,5,0,5,10,10,600,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+        const toAssTime = (seconds: number) => {
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            const cs = Math.floor((seconds % 1) * 100);
+            return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${cs.toString().padStart(2, '0')}`;
+        };
+
+        // Determine Hook Range
+        let hookWordsCount = 0;
+        if (hookText) {
+            const cleanHook = hookText.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+            hookWordsCount = cleanHook.split(' ').length;
+        }
+
+        // Process Words
+        let currentHookGroup: string[] = [];
+        let hookStartTime = -1;
+        let hookEndTime = -1;
+
+        words.forEach((w, index) => {
+            const isHook = index < hookWordsCount;
+            const startTime = Math.max(0, w.start + leadIn);
+            const endTime = w.end;
+            const text = w.word.toUpperCase().replace(/[^\w]/g, ''); // Clean punctuation
+
+            if (isHook) {
+                // Group hook words into one big block if possible, or line by line
+                // For Viral feel, hook usually static or 2-3 lines.
+                // Let's print hook words individually but with HookStyle? 
+                // OR group them? 
+                // "Your brain processes images..." -> "YOUR BRAIN" (pop) "PROCESSES" (pop)...
+                // Let's stick to word-by-word for now to be safe, but bigger font.
+                
+                const anim = `{\\fscx115\\fscy115\\t(0,80,\\fscx100\\fscy100)}`;
+                assContent += `Dialogue: 0,${toAssTime(startTime)},${toAssTime(endTime)},HookStyle,,0,0,0,,${anim}${text}\n`;
+            } else {
+                // Body: Typewriter or Pop?
+                // User asked for: "animacija je kao da se pise rec ne samo da se pojavljuje"
+                // Typewriter effect per letter:
+                // {\alpha&HFF&}\t(0, 50, \alpha&H00&)
+                // We need to split word into letters and time them.
+                
+                const letters = text.split('');
+                const duration = (endTime - startTime) * 1000; // ms
+                const step = Math.min(50, duration / letters.length); // ms per letter
+                
+                let letterTags = '';
+                letters.forEach((char, i) => {
+                    // Start invisible (alpha FF), fade in (alpha 00) at specific time
+                    // But standard Typewriter is usually accumulative text.
+                    // Here we have ONE word on screen. 
+                    // So we just reveal letters of THAT word.
+                    
+                    const delay = i * step;
+                    // \alpha&HFF& = Invisible
+                    // \t(delay, delay+1, \alpha&H00&) = Become visible
+                    // We need to set initial alpha for the whole line to transparent? No, per character.
+                    
+                    letterTags += `{\\alpha&HFF&\\t(${delay.toFixed(0)},${(delay+1).toFixed(0)},\\alpha&H00&)}${char}`;
+                });
+                
+                // Also add a slight scale pop for the whole word container?
+                // Let's keep it simple: Just letters appearing.
+                
+                assContent += `Dialogue: 0,${toAssTime(startTime)},${toAssTime(endTime)},Default,,0,0,0,,${letterTags}\n`;
+            }
+        });
+
+        fs.writeFileSync(outputPath, assContent);
+    }
+
     /**
      * Create Kinetic Typography Subtitles
      * 1 word per subtitle (except Hook)
@@ -516,107 +609,91 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         
         if (hookText) {
             const cleanHook = cleanText(hookText);
-            // Check if fullText starts with cleanHook
-            // Remove punctuation for check
             const normFull = fullText.toLowerCase().replace(/[^\w\s]/g, '');
             const normHook = cleanHook.toLowerCase().replace(/[^\w\s]/g, '');
             
             if (normFull.startsWith(normHook)) {
                 hasHook = true;
-                // Find where hook ends in original text
-                // Rough estimate based on words
                 const hookWordsCount = cleanHook.split(' ').length;
                 const allWords = fullText.split(' ');
-                // Reconstruct hook from fullText to get exact punctuation
                 const matchedHook = allWords.slice(0, hookWordsCount).join(' ');
                 hookEndIndex = matchedHook.length;
                 
-                // Hook Duration Strategy: 
-                // User said: 1.8–2.2s. Let's aim for 2.0s
-                // BUT proportional to length is safer if hook is very long or short
-                // Let's use proportional but capped/floored
                 const totalChars = fullText.length;
                 const hookChars = matchedHook.length;
                 const proportionalHookTime = (hookChars / totalChars) * totalDuration;
-                
-                // Boost hook time slightly because it's dense? Or cap it?
-                // User said "Hook... 1.8-2.2s". 
-                // If total duration is 60s, proportional might be 5s. That's too long for a static slide.
-                // We should force it to ~2s.
                 hookDuration = Math.min(2.5, Math.max(1.5, proportionalHookTime));
             }
         }
 
         const segments: SubtitleSegment[] = [];
         let currentTime = 0;
-        const overlap = 0.1; // 100ms overlap
-        // Start time offset (User said start_time = word_start_time - 0.05s)
-        const leadIn = -0.05;
+        // Aggressive Lead-in for Snappy feel
+        const leadIn = -0.15; // 150ms pre-display
 
         // 3. Handle Hook
         if (hasHook) {
             const hookContent = fullText.substring(0, hookEndIndex);
             
             segments.push({
-                text: hookContent.toUpperCase(), // HOOK ALWAYS CAPS
+                text: hookContent.toUpperCase(), 
                 startTime: 0,
-                duration: hookDuration + overlap,
+                duration: hookDuration, // No extra overlap for hook, it needs to clear for body
                 styleName: 'HookStyle'
             });
             
             currentTime += hookDuration;
         }
 
-        // 4. Handle Body (Word-by-Word)
+        // 4. Handle Body (Smart Punctuation-Aware Estimation)
         const bodyText = hasHook ? fullText.substring(hookEndIndex).trim() : fullText;
         if (!bodyText) return segments;
 
         const words = bodyText.split(' ');
         const bodyDuration = totalDuration - currentTime;
         
-        // Calculate total characters in body for proportional timing
-        const totalBodyChars = words.reduce((acc, w) => acc + w.length, 0);
+        // Count punctuation to deduce "Silence Time"
+        const commaCount = (bodyText.match(/,/g) || []).length;
+        const periodCount = (bodyText.match(/[.!?]/g) || []).length;
         
-        // Keywords logic (Simple Heuristics)
-        // Nouns, Verbs, Emotional words, Numbers
-        // We'll use a basic list + regex
-        const commonVerbs = ['is', 'are', 'was', 'were', 'have', 'has', 'had', 'do', 'does', 'did', 'can', 'could', 'will', 'would', 'should'];
-        const stopWords = ['the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'and', 'but', 'or', 'so', 'it', 'this', 'that', 'these', 'those', 'he', 'she', 'they', 'we', 'i', 'you', 'my', 'your', 'his', 'her', 'their', 'our'];
+        // Estimate silence duration: 0.3s for comma, 0.5s for period
+        // But cap it so we don't eat up entire duration
+        const estimatedSilence = Math.min(bodyDuration * 0.3, (commaCount * 0.3) + (periodCount * 0.5));
+        
+        // Active speech time is what remains
+        const activeSpeechTime = bodyDuration - estimatedSilence;
+        
+        // Calculate characters ONLY in words (no spaces/punctuation for weight)
+        const totalWordChars = words.reduce((acc, w) => acc + w.replace(/[^\w]/g, '').length, 0);
         
         words.forEach(word => {
             const cleanWord = word.replace(/[^\w]/g, '');
             const wordLen = cleanWord.length;
             
-            // Calculate duration based on character length relative to total body length
-            // Ensure min duration of 0.2s for readability
-            let wordDuration = (wordLen / totalBodyChars) * bodyDuration;
-            // Adjust: distribute remaining time if min duration is enforced?
-            // Simple proportional is safest to ensure they sum up to bodyDuration
+            // Check for pause after this word
+            let pauseAfter = 0;
+            if (word.includes(',')) pauseAfter = 0.3;
+            if (word.match(/[.!?]/)) pauseAfter = 0.5;
             
-            // Determine Style
-            let styleName = 'Default';
-            
-            // Check for Number
-            if (/\d/.test(word)) {
-                styleName = 'Number'; // Red
-            }
-            // Check for Keywords (Long words, not stop words, or specific emotional words)
-            else if (wordLen > 5 && !stopWords.includes(cleanWord.toLowerCase())) {
-                styleName = 'Keyword'; // Yellow/Green
-            }
-            // Check specific emotional/impact words
-            else if (['shocking', 'secret', 'never', 'always', 'stop', 'die', 'live', 'love', 'hate', 'brain', 'money'].includes(cleanWord.toLowerCase())) {
-                styleName = 'Keyword';
+            // Scale pause if we are running out of time
+            if (estimatedSilence > 0) {
+                 pauseAfter = pauseAfter * (estimatedSilence / ((commaCount * 0.3) + (periodCount * 0.5)));
             }
 
+            // Word duration is proportional to its length in active time
+            const wordDuration = (wordLen / totalWordChars) * activeSpeechTime;
+            
+            // Minimum duration safety (0.15s) - steal from pause if needed
+            let finalDuration = Math.max(0.15, wordDuration);
+            
             segments.push({
-                text: word,
-                startTime: Math.max(0, currentTime + leadIn), // Apply lead-in
-                duration: wordDuration + overlap,
-                styleName: styleName
+                text: cleanWord, // Strip punctuation from display text
+                startTime: Math.max(0, currentTime + leadIn),
+                duration: finalDuration + 0.1, // Small visual linger
+                styleName: 'Default'
             });
             
-            currentTime += wordDuration;
+            currentTime += finalDuration + pauseAfter;
         });
 
         return segments;

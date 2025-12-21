@@ -10,7 +10,6 @@ yarn.lock
 .env
 .env.local
 .env.*.local
-*.env
 
 # Build outputs
 dist/
@@ -74,7 +73,6 @@ temp/
 # Explicitly ignore service account keys
 *service-account*.json
 *credentials*.json
-tt-printer-*.json
 
 # Python
 __pycache__/
@@ -107,3 +105,4 @@ coverage/
 *.pid
 *.seed
 *.pid.lock
+tt-printer-481522-99058485f90b.json

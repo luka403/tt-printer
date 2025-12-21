@@ -14,8 +14,8 @@ export class LLMService {
 
     constructor() {
         // Defaults to remote Python FastAPI server
-        // FORCE the IP provided by user, ignoring .env for now since .env is read-only/stuck
-        this.baseUrl = 'http://54.84.200.147:8080'; 
+        // Use environment variable first, then fallback to current IP
+        this.baseUrl = process.env.LLM_API_URL || 'http://54.84.200.147:8080'; 
         this.apiKey = process.env.LLM_API_KEY || 'tt-printer-key_key-key';
         this.model = process.env.LLM_MODEL || 'llama3.1:8b';
         
